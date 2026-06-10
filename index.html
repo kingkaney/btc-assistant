@@ -89,6 +89,8 @@
   .panel.collapsed .pchev { transform: rotate(-90deg); }
   .panel.collapsed .panel-body { display: none; }
   .panel.collapsed .panel-head { border-bottom: none; }
+  .panel-peek { display: none; padding: 0 16px 11px; font-size: 10.5px; color: #a8b6c9; line-height: 1.5; cursor: pointer; }
+  .panel.collapsed .panel-peek { display: block; }
 
   .stat-grid { display: grid; gap: 14px; }
   .cols-2 { grid-template-columns: 1fr 1fr; } .cols-3 { grid-template-columns: 1fr 1fr 1fr; }
@@ -1978,6 +1980,7 @@ async function fetchCLI(force) {
   }
   saveCLI(cache);
   renderScorecard();
+  refreshAutoPeeks();
 }
 
 // Match locked calls against final officials.
@@ -2226,6 +2229,7 @@ async function fetchBlip(force) {
   }
   saveBlip(cache);
   renderBlip();
+  refreshAutoPeeks();
 }
 
 function renderBlip() {
@@ -2291,6 +2295,19 @@ function renderBlip() {
 // Kalshi edge & Kelly sizing (manual price entry — Kalshi's API blocks browsers,
 // so you type the YES cents off the board; the app does the rest)
 // =============================================================================
+// Collapsed-panel peek lines: each collapsed panel shows the first sentence of
+// its own live body content, so headlines stay visible without expanding.
+function refreshAutoPeeks() {
+  document.querySelectorAll(".panel").forEach(p => {
+    const el = p.querySelector(".panel-peek");
+    if (!el) return;
+    if (p.id === "map-panel") { el.textContent = "tap to expand the station map"; return; }
+    const body = p.querySelector(".panel-body");
+    const t = (body ? body.textContent : "").trim().replace(/\s+/g, " ");
+    el.textContent = t ? (t.length > 120 ? t.slice(0, 120) + "…" : t) : "";
+  });
+}
+
 const EDGE_KEY = "ksea_edge_v1";
 function loadEdge() { try { return JSON.parse(localStorage.getItem(EDGE_KEY) || "{}"); } catch (e) { return {}; } }
 function saveEdge(o) {
@@ -2458,6 +2475,7 @@ async function pollLive1m(force) {
   }
   saveL1M(s);
   renderLive1m();
+  refreshAutoPeeks();
 }
 
 // One-tap: build the KSEA1M timeseries URL from the saved Synoptic token
@@ -2676,6 +2694,7 @@ function renderAll() {
   renderBlip();
   renderLive1m();
   renderConditions();
+  setTimeout(refreshAutoPeeks, 0);
   renderNearbyStations();
   renderSynopticStations();
   renderBuckets();
@@ -3625,6 +3644,10 @@ const PANELS_KEY = "ksea_panels_v1";
     chev.className = "pchev"; chev.textContent = "▼";
     const firstSpan = head.firstElementChild;
     if (firstSpan) firstSpan.insertBefore(chev, firstSpan.firstChild); else head.insertBefore(chev, head.firstChild);
+    const peek = document.createElement("div");
+    peek.className = "panel-peek";
+    head.insertAdjacentElement("afterend", peek);
+    peek.addEventListener("click", () => head.click());
     const collapsed = saved[id] != null ? !!saved[id] : DEFAULT_COLLAPSED.has(id);
     if (collapsed) p.classList.add("collapsed");
     head.addEventListener("click", (e) => {
@@ -3636,6 +3659,7 @@ const PANELS_KEY = "ksea_panels_v1";
       try { localStorage.setItem(PANELS_KEY, JSON.stringify(st)); } catch (err) {}
     });
   });
+  refreshAutoPeeks();
 })();
 
 // When the app returns to the foreground, Android has usually frozen the timers —
