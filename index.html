@@ -182,6 +182,12 @@
   <div class="panel-body" id="score-body"><div style="font-size:11px;color:#94a2b4">fetching official climate reports…</div></div>
 </div>
 
+<!-- 1-MINUTE BLIP RISK (NCEI one-minute archive via IEM) -->
+<div class="panel" id="blip-panel">
+  <div class="panel-head"><span>🔬 1-Min Blip Risk</span><span class="accent" id="blip-status">—</span></div>
+  <div class="panel-body" id="blip-body"><div style="font-size:11px;color:#94a2b4">fetching one-minute archive…</div></div>
+</div>
+
 <!-- LIVE CONDITIONS SUMMARY (today only) -->
 <div class="panel" id="conditions-panel">
   <div class="panel-head">
@@ -1629,7 +1635,7 @@ function renderConditions() {
   const tempPart = c.tempF != null ? `Currently <b style="color:#fcd34d">${c.tempF.toFixed(1)}°F</b>` : "Temp unknown";
   const dewPart  = c.dewF  != null ? `dew ${c.dewF.toFixed(0)}°` : "";
   const rhPart   = rh != null ? `RH ${rh.toFixed(0)}%` : "";
-  summaryEl.innerHTML = `${tempPart}, ${[dewPart, rhPart].filter(Boolean).join(", ")}, ${wind}, ${cloud}.`;
+  summaryEl.innerHTML = [tempPart, [dewPart, rhPart].filter(Boolean).join(", "), wind, cloud].filter(Boolean).join(", ") + ".";
 
   // Grid of detail stats
   gridEl.innerHTML = [
@@ -1922,10 +1928,10 @@ async function fetchCLI(force) {
   if (!force && cache.lastFetch && now - cache.lastFetch < 25 * 60 * 1000) { renderScorecard(); return; }
   cache.lastFetch = now; saveCLI(cache);   // stamp first so errors don't cause hammering
   try {
-    const r = await fetch("https://api.weather.gov/products/types/CLI/locations/SEW?limit=15");
+    const r = await fetch("https://api.weather.gov/products/types/CLI/locations/SEW");
     if (!r.ok) throw new Error("CLI list HTTP " + r.status);
     const j = await r.json();
-    const items = j["@graph"] || [];
+    const items = (j["@graph"] || []).slice(0, 15);  // newest first; cap client-side
     cache.products = cache.products || {};
     if (Object.keys(cache.products).length > 80) cache.products = {}; // crude prune
     let fetched = 0;
@@ -2074,6 +2080,197 @@ function renderScorecard() {
   bodyEl.innerHTML = html;
 }
 
+// =============================================================================
+// 1-minute blip risk (NCEI one-minute ASOS archive, via IEM mirror)
+// The settle is computed from the 1-min stream; public feeds only show 5-min
+// slices. This backfills recent settled days and measures how often the true
+// 1-min max beat what a 5-min watcher could see — the invisible-upside skew.
+// Archive lags ~1-5 days, so this is statistics, not a live signal.
+// =============================================================================
+const BLIP_KEY = "ksea_blip_v1";
+function loadBlip() { try { return JSON.parse(localStorage.getItem(BLIP_KEY) || "{}"); } catch (e) { return {}; } }
+function saveBlip(o) { try { localStorage.setItem(BLIP_KEY, JSON.stringify(o)); } catch (e) {} }
+
+// Climate day = midnight–midnight LST (PST, UTC-8) year-round → [D 08:00Z, D+1 08:00Z)
+function climateDayOfUTC(ms) {
+  return new Date(ms - 8 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+// Parse IEM asos1min CSV -> [{ms, tempF}] (skips missing 'M' rows)
+function parseBlipCSV(text) {
+  const out = [];
+  const lines = String(text || "").split(/\r?\n/);
+  let iValid = -1, iTmpf = -1;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const cells = line.split(",").map(s => s.trim());
+    if (iValid < 0) {                       // header row
+      cells.forEach((c, i) => {
+        const k = c.toLowerCase();
+        if (k.includes("valid")) iValid = i;
+        if (k.includes("tmpf")) iTmpf = i;
+      });
+      continue;
+    }
+    if (iTmpf < 0 || cells.length <= Math.max(iValid, iTmpf)) continue;
+    const t = parseFloat(cells[iTmpf]);
+    if (!isFinite(t) || t < -40 || t > 130) continue;
+    const ms = Date.parse(cells[iValid].replace(" ", "T") + (cells[iValid].includes("Z") ? "" : "Z"));
+    if (!isFinite(ms)) continue;
+    out.push({ ms, tempF: t });
+  }
+  return out;
+}
+
+// Officials for grading the archive: IEM's parsed-CLI service (whole year, one call),
+// merged with our own CLISEA cache (fresher for the most recent day or two).
+async function blipOfficials(cache) {
+  const now = Date.now();
+  if (!cache.cliYear || now - (cache.cliYearAt || 0) > 12 * 3600 * 1000) {
+    try {
+      const yr = new Date().getUTCFullYear();
+      const r = await fetch(`https://mesonet.agron.iastate.edu/json/cli.py?station=KSEA&year=${yr}`);
+      if (r.ok) {
+        const j = await r.json();
+        const map = {};
+        (j.results || []).forEach(row => {
+          const d = row.valid || row.date;
+          const hi = row.high != null ? row.high : (row.max_tmpf != null ? row.max_tmpf : null);
+          if (d && hi != null && isFinite(hi)) map[d] = Math.round(hi);
+        });
+        if (Object.keys(map).length) { cache.cliYear = map; cache.cliYearAt = now; }
+      }
+    } catch (e) { /* fall through to CLISEA cache */ }
+  }
+  const off = Object.assign({}, cache.cliYear || {});
+  const own = (loadCLI().officials) || {};
+  Object.keys(own).forEach(d => { if (own[d].final) off[d] = own[d].max; });
+  return off;
+}
+
+async function fetchBlip(force) {
+  const cache = loadBlip();
+  const now = Date.now();
+  if (!force && cache.lastFetch && now - cache.lastFetch < 25 * 60 * 1000) { renderBlip(); return; }
+  cache.lastFetch = now; saveBlip(cache);
+  try {
+    const officials = await blipOfficials(cache);
+    cache.days = cache.days || {};
+
+    // settled climate days (ended in PST) with an official, not yet analyzed — newest first
+    const todayPST = climateDayOfUTC(now);
+    const want = Object.keys(officials).filter(d => d < todayPST && !cache.days[d]).sort().reverse();
+    if (want.length) {
+      // one archive request covering the newest unanalyzed stretch (cap ~10 days span)
+      const newest = want[0];
+      const batch = want.filter(d => (Date.parse(newest) - Date.parse(d)) < 10 * 86400 * 1000);
+      const d0 = batch[batch.length - 1], d1 = batch[0];
+      const s = new Date(Date.parse(d0 + "T00:00:00Z") + 8 * 3600 * 1000);
+      const e = new Date(Date.parse(d1 + "T00:00:00Z") + 32 * 3600 * 1000);
+      const sta = cache.staId || "SEA";
+      const url = `https://mesonet.agron.iastate.edu/cgi-bin/request/asos1min.py?station[]=${sta}&vars[]=tmpf`
+        + `&sample=1min&what=download&delim=comma&tz=UTC`
+        + `&year1=${s.getUTCFullYear()}&month1=${s.getUTCMonth() + 1}&day1=${s.getUTCDate()}&hour1=${s.getUTCHours()}&minute1=0`
+        + `&year2=${e.getUTCFullYear()}&month2=${e.getUTCMonth() + 1}&day2=${e.getUTCDate()}&hour2=${e.getUTCHours()}&minute2=0`;
+      let r = await fetch(url);
+      let rows = r.ok ? parseBlipCSV(await r.text()) : [];
+      if (!rows.length && !cache.staId) {                       // station-id fallback, once
+        r = await fetch(url.replace("station[]=SEA", "station[]=KSEA"));
+        rows = r.ok ? parseBlipCSV(await r.text()) : [];
+        if (rows.length) cache.staId = "KSEA";
+      } else if (rows.length && !cache.staId) cache.staId = sta;
+
+      // bucket by climate day, compute 1-min max vs 5-min-visible max
+      const byDay = {};
+      rows.forEach(p => {
+        const d = climateDayOfUTC(p.ms);
+        if (!batch.includes(d)) return;
+        const b = byDay[d] || (byDay[d] = { max1: -999, max5: -999, n: 0 });
+        b.n++;
+        if (p.tempF > b.max1) b.max1 = p.tempF;
+        if (new Date(p.ms).getUTCMinutes() % 5 === 0 && p.tempF > b.max5) b.max5 = p.tempF;
+      });
+      batch.forEach(d => {
+        const b = byDay[d];
+        if (b && b.n >= 900 && b.max5 > -999) {                  // require a mostly-complete day
+          cache.days[d] = { settle: officials[d], max1: +b.max1.toFixed(1), max5: +b.max5.toFixed(1), n: b.n };
+        } else {
+          cache.days[d] = { settle: officials[d], gap: true };   // archive not posted yet / too holey
+        }
+      });
+      // retry gap days later (archive lag): drop gap markers older than this batch after 6h
+      Object.keys(cache.days).forEach(d => {
+        if (cache.days[d].gap && now - (cache.gapAt || 0) > 6 * 3600 * 1000) delete cache.days[d];
+      });
+      if (Object.values(cache.days).some(v => v.gap)) cache.gapAt = now;
+    }
+    cache.error = null;
+  } catch (e) {
+    cache.error = String((e && e.message) || e);
+  }
+  saveBlip(cache);
+  renderBlip();
+}
+
+function renderBlip() {
+  const bodyEl = document.getElementById("blip-body");
+  const statusEl = document.getElementById("blip-status");
+  if (!bodyEl) return;
+  const cache = loadBlip();
+  const days = Object.keys(cache.days || {})
+    .map(d => Object.assign({ date: d }, cache.days[d]))
+    .filter(r => !r.gap).sort((a, b) => b.date.localeCompare(a.date));
+
+  if (!days.length) {
+    if (statusEl) statusEl.textContent = "—";
+    bodyEl.innerHTML = `<div style="font-size:11px;color:#94a2b4;line-height:1.5">${
+      cache.error
+        ? `Couldn't reach the IEM 1-min archive (${cache.error}). <a href="#" onclick="fetchBlip(true);return false" style="color:#60a5fa">↻ retry</a> — if this keeps failing, tell Claude the exact message.`
+        : `No archive days analyzed yet (the 1-min archive lags ~1–5 days). <a href="#" onclick="fetchBlip(true);return false" style="color:#60a5fa">↻ check now</a>`
+    }</div>`;
+    return;
+  }
+
+  const flips = days.filter(r => Math.round(r.max1) > Math.round(r.max5));
+  const excesses = days.map(r => r.max1 - r.max5);
+  const avgEx = excesses.reduce((a, b) => a + b, 0) / excesses.length;
+  const maxEx = Math.max(...excesses);
+  const withSettle = days.filter(r => r.settle != null);
+  const matches = withSettle.filter(r => r.settle === Math.round(r.max1));
+  const wholeOnly = days.every(r => Number.isInteger(r.max1) && Number.isInteger(r.max5));
+
+  if (statusEl) statusEl.textContent = `${flips.length}/${days.length} blip days`;
+
+  let html = `<div style="font-size:13px;line-height:1.55;color:#eef3fa">
+    The settle beat the visible 5-min max on <b style="color:#fcd34d">${flips.length} of ${days.length}</b> day${days.length === 1 ? "" : "s"}
+    (${(flips.length / days.length * 100).toFixed(0)}%) · avg invisible excess <b>${avgEx >= 0 ? "+" : ""}${avgEx.toFixed(1)}°</b> · worst <b>+${maxEx.toFixed(1)}°</b></div>`;
+
+  if (withSettle.length) {
+    html += `<div style="font-size:10px;color:#94a2b4;margin-top:5px">Validation: official settle = rounded 1-min max on ${matches.length}/${withSettle.length} days${matches.length === withSettle.length ? " ✓ (settlement model confirmed)" : ""}</div>`;
+  }
+
+  html += `<div style="margin-top:9px;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px">`;
+  days.slice(0, 8).forEach(r => {
+    const flip = Math.round(r.max1) > Math.round(r.max5);
+    html += `<div style="display:flex;justify-content:space-between;font-size:10.5px;padding:2.5px 0;font-variant-numeric:tabular-nums;color:#cdd9e8">
+      <span style="color:#94a2b4">${fmtDateShort(r.date)}</span>
+      <span>1-min <b>${r.max1.toFixed(1)}°</b></span>
+      <span>5-min ${r.max5.toFixed(1)}°</span>
+      <span>set ${r.settle != null ? r.settle + "°" : "—"}</span>
+      <span style="min-width:30px;text-align:right">${flip ? `<span style="color:#fbbf24">⚡</span>` : `<span style="color:#56657a">·</span>`}</span>
+    </div>`;
+  });
+  html += `</div>`;
+
+  const notes = [];
+  if (days.length < 20) notes.push(`${days.length} day${days.length === 1 ? "" : "s"} analyzed — backfills more each refresh; want 45+ before trusting the rate.`);
+  if (wholeOnly) notes.push(`archive here reports whole °F — sub-1° blips invisible, so the true rate is at least this.`);
+  notes.push(`archive lags ~1–5 days; this prices boundary-day risk, it isn't a live feed.`);
+  html += `<div style="margin-top:7px;font-size:9px;color:#7e8ea4;line-height:1.5">⚠ ${notes.join(" · ")}</div>`;
+  html += `<div style="margin-top:5px;font-size:9px;color:#56657a">source: NCEI one-minute ASOS via IEM · <a href="#" onclick="fetchBlip(true);return false" style="color:#60a5fa">↻ check now</a></div>`;
+  bodyEl.innerHTML = html;
+}
+
 function renderDrift() {
   const bodyEl = document.getElementById("drift-body");
   const statusEl = document.getElementById("drift-status");
@@ -2176,6 +2373,7 @@ function renderAll() {
   renderAICall();
   renderDrift();
   renderScorecard();
+  renderBlip();
   renderConditions();
   renderNearbyStations();
   renderSynopticStations();
@@ -3110,6 +3308,8 @@ refresh();
 setInterval(refresh, 300_000); // refresh every 5 min (model data doesn't change faster)
 fetchCLI();                       // official climate reports: on load…
 setInterval(() => fetchCLI(), 1_800_000); // …and every 30 min (CLI only updates ~2×/day)
+setTimeout(() => fetchBlip(), 4000);      // 1-min archive backfill: after first paint…
+setInterval(() => fetchBlip(), 1_800_000); // …then every 30 min (archive lags days anyway)
 setInterval(() => { if (MAP.inited) { loadRadar(); loadWindCloud(); } }, 300_000);
 setInterval(renderStatus, 5000);
 window.addEventListener("resize", () => { renderChart(); if (MAP.map) { try { MAP.map.invalidateSize(); } catch(e){} } });
