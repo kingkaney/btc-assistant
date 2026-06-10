@@ -176,6 +176,12 @@
   <div class="panel-body" id="drift-body"></div>
 </div>
 
+<!-- OFFICIAL SETTLE + SCORECARD (NWS CLI auto-pull) -->
+<div class="panel" id="score-panel">
+  <div class="panel-head"><span>🏛 Official Settle · Scorecard</span><span class="accent" id="score-status">—</span></div>
+  <div class="panel-body" id="score-body"><div style="font-size:11px;color:#94a2b4">fetching official climate reports…</div></div>
+</div>
+
 <!-- LIVE CONDITIONS SUMMARY (today only) -->
 <div class="panel" id="conditions-panel">
   <div class="panel-head">
@@ -1869,6 +1875,205 @@ function binLabel(S) {
   return `${lo}-${lo + 1}`;
 }
 
+// =============================================================================
+// Official settle (NWS CLI auto-pull) + scorecard
+// Kalshi settles on the NWS Daily Climate Report (CLISEA). api.weather.gov serves
+// it with CORS, so the app can pull the official number itself and grade each
+// locked AI call against reality.
+// =============================================================================
+const CLI_KEY = "ksea_cli_v1";
+function loadCLI() { try { return JSON.parse(localStorage.getItem(CLI_KEY) || "{}"); } catch (e) { return {}; } }
+function saveCLI(o) { try { localStorage.setItem(CLI_KEY, JSON.stringify(o)); } catch (e) {} }
+
+const MONTH_NUM = { JANUARY:1, FEBRUARY:2, MARCH:3, APRIL:4, MAY:5, JUNE:6,
+  JULY:7, AUGUST:8, SEPTEMBER:9, OCTOBER:10, NOVEMBER:11, DECEMBER:12 };
+
+// Parse one CLI product text -> { date, max, maxTime, final, issued } or { skip:true }.
+// "final" = the after-midnight report for the completed climate day (settlement value).
+// Non-final = the afternoon intermediate ("VALID TODAY AS OF ...") = official max SO FAR.
+function parseCLIText(text, issuedISO) {
+  if (!text) return { skip: true };
+  if (!/SEATTLE\s*[- ]?\s*TACOMA/i.test(text) && !/\bCLISEA\b/.test(text)) return { skip: true };
+  const dm = text.match(/CLIMATE SUMMARY FOR\s+([A-Z]+)\s+(\d{1,2})\s+(\d{4})/i);
+  if (!dm) return { skip: true };
+  const mon = MONTH_NUM[dm[1].toUpperCase()];
+  if (!mon) return { skip: true };
+  const date = `${dm[3]}-${String(mon).padStart(2, "0")}-${String(+dm[2]).padStart(2, "0")}`;
+  const ti = text.search(/TEMPERATURE/i);
+  const seg = ti >= 0 ? text.slice(ti, ti + 500) : text;
+  const mm = seg.match(/MAXIMUM\s+(\d{1,3})/i);
+  if (!mm) return { skip: true };
+  const max = parseInt(mm[1], 10);
+  if (!(max > -30 && max < 130)) return { skip: true };
+  const tmt = seg.match(/MAXIMUM\s+\d{1,3}\s+(\d{1,4}\s*[AP]M)/i);
+  return {
+    date, max,
+    maxTime: tmt ? tmt[1].replace(/\s+/g, " ") : null,
+    final: !/VALID TODAY/i.test(text),
+    issued: issuedISO || null,
+  };
+}
+
+// Pull recent CLI products from api.weather.gov (CORS-friendly), parse, cache.
+// Throttled to ~25 min unless forced; ≤6 detail fetches per cycle for politeness.
+async function fetchCLI(force) {
+  const cache = loadCLI();
+  const now = Date.now();
+  if (!force && cache.lastFetch && now - cache.lastFetch < 25 * 60 * 1000) { renderScorecard(); return; }
+  cache.lastFetch = now; saveCLI(cache);   // stamp first so errors don't cause hammering
+  try {
+    const r = await fetch("https://api.weather.gov/products/types/CLI/locations/SEW?limit=15");
+    if (!r.ok) throw new Error("CLI list HTTP " + r.status);
+    const j = await r.json();
+    const items = j["@graph"] || [];
+    cache.products = cache.products || {};
+    if (Object.keys(cache.products).length > 80) cache.products = {}; // crude prune
+    let fetched = 0;
+    for (const it of items) {
+      const id = it.id || it["@id"];
+      if (!id || cache.products[id] || fetched >= 6) continue;
+      const url = it["@id"] || ("https://api.weather.gov/products/" + id);
+      try {
+        const rd = await fetch(url);
+        if (!rd.ok) continue;
+        const pj = await rd.json();
+        fetched++;
+        cache.products[id] = parseCLIText(pj.productText || "", it.issuanceTime || pj.issuanceTime || null);
+      } catch (e) { /* leave for next cycle */ }
+    }
+    // Rebuild per-date officials: final beats intermediate; later issuance wins.
+    const off = {};
+    Object.values(cache.products).forEach(p => {
+      if (!p || p.skip || !p.date) return;
+      const cur = off[p.date];
+      if (!cur || (p.final && !cur.final) ||
+          (p.final === cur.final && String(p.issued || "") > String(cur.issued || ""))) off[p.date] = p;
+    });
+    cache.officials = off;
+    cache.error = null;
+  } catch (e) {
+    cache.error = String((e && e.message) || e);
+  }
+  saveCLI(cache);
+  renderScorecard();
+}
+
+// Match locked calls against final officials.
+function gradeScore() {
+  const off = (loadCLI().officials) || {};
+  const calls = loadAICalls();
+  const rows = [];
+  Object.keys(off).sort().reverse().forEach(date => {
+    const o = off[date];
+    if (!o.final) return;
+    const row = { date, official: o.max, maxTime: o.maxTime };
+    const c = calls[date];
+    if (c && c.valid) {
+      let lo = null;
+      const m = String(c.callLabel || "").match(/(\d+)\s*[-–]\s*(\d+)/);
+      if (m) lo = parseInt(m[1], 10);
+      else if (c.predHigh != null) lo = c.predHigh % 2 === 0 ? c.predHigh - 1 : c.predHigh;
+      row.call = lo != null ? `${lo}-${lo + 1}` : "?";
+      row.hit = lo != null ? (o.max >= lo && o.max <= lo + 1) : null;
+      row.err = c.predHigh != null ? o.max - c.predHigh : null;
+      row.conf = c.conf || "";
+    }
+    rows.push(row);
+  });
+  const graded = rows.filter(r => r.hit === true || r.hit === false);
+  const errs = graded.filter(r => r.err != null).map(r => r.err);
+  const stats = {
+    n: graded.length,
+    hits: graded.filter(r => r.hit).length,
+    bias: errs.length ? errs.reduce((a, b) => a + b, 0) / errs.length : null,
+    mae: errs.length ? errs.reduce((a, b) => a + Math.abs(b), 0) / errs.length : null,
+  };
+  return { rows, stats };
+}
+
+function fmtDateShort(d) {
+  try { return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }); }
+  catch (e) { return d; }
+}
+
+function renderScorecard() {
+  const bodyEl = document.getElementById("score-body");
+  const statusEl = document.getElementById("score-status");
+  if (!bodyEl) return;
+  const cache = loadCLI();
+  const off = cache.officials || {};
+  const { rows, stats } = gradeScore();
+  const pac = pacificNowParts();
+  const finals = rows;                       // already final-only, newest first
+  const interToday = off[pac.date] && !off[pac.date].final ? off[pac.date] : null;
+
+  if (statusEl) statusEl.textContent = stats.n ? `${stats.hits}/${stats.n} hit` : (finals.length ? "live" : "—");
+
+  if (!finals.length && !interToday) {
+    bodyEl.innerHTML = `<div style="font-size:11px;color:#94a2b4;line-height:1.5">${
+      cache.error
+        ? `Couldn't reach api.weather.gov (${cache.error}). <a href="#" onclick="fetchCLI(true);return false" style="color:#60a5fa">↻ retry</a>`
+        : `No official climate reports parsed yet. <a href="#" onclick="fetchCLI(true);return false" style="color:#60a5fa">↻ check now</a>`
+    }</div>`;
+    return;
+  }
+
+  let html = "";
+
+  // Banner: latest settled day
+  if (finals.length) {
+    const f = finals[0];
+    const mark = f.hit === true ? `<span style="color:#34d399;font-weight:600">✓ hit</span>`
+               : f.hit === false ? `<span style="color:#f87171;font-weight:600">✗ miss</span>`
+               : `<span style="color:#7e8ea4">no locked call</span>`;
+    html += `<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div><span style="font-size:11px;color:#94a2b4">${fmtDateShort(f.date)} settled</span>
+        <span style="font-size:22px;font-weight:700;color:#fcd34d;font-variant-numeric:tabular-nums"> ${f.official}°</span>
+        <span style="font-size:10px;color:#7e8ea4">${f.maxTime ? "@ " + f.maxTime : ""} · CLISEA</span></div>
+      <div style="font-size:11px">${f.call ? `call ${f.call}° → ${mark}` : mark}</div>
+    </div>`;
+  }
+
+  // Intermediate (afternoon) CLI for today: the authoritative tenths-rounded max so far
+  if (interToday) {
+    html += `<div style="margin-top:9px;padding:7px 9px;background:rgba(251,191,36,0.08);border-left:2px solid #fbbf24;border-radius:4px;font-size:10px;line-height:1.5;color:#fde68a">
+      🏛 Official max <b>so far today</b> (afternoon CLI): <b>${interToday.max}°</b>${interToday.maxTime ? " @ " + interToday.maxTime : ""}.
+      This is the precise-rounded number — when the whole-°C feed disagrees, trust this.</div>`;
+  }
+
+  // Recent graded rows
+  const show = finals.slice(0, 8);
+  if (show.length) {
+    html += `<div style="margin-top:10px;border-top:1px solid rgba(255,255,255,0.08);padding-top:7px">`;
+    show.forEach(r => {
+      const mark = r.hit === true ? `<span style="color:#34d399">✓</span>`
+                 : r.hit === false ? `<span style="color:#f87171">✗</span>`
+                 : `<span style="color:#56657a">—</span>`;
+      const err = r.err != null ? `<span style="color:#7e8ea4">${r.err > 0 ? "+" : ""}${r.err}°</span>` : "";
+      html += `<div style="display:flex;justify-content:space-between;font-size:10.5px;padding:2.5px 0;font-variant-numeric:tabular-nums;color:#cdd9e8">
+        <span style="color:#94a2b4">${fmtDateShort(r.date)}</span>
+        <span>${r.call ? "call " + r.call + "°" : "<span style='color:#56657a'>no call</span>"}</span>
+        <span>set <b>${r.official}°</b></span>
+        <span style="min-width:52px;text-align:right">${mark} ${err}</span>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Stats footer
+  if (stats.n) {
+    const pctTxt = `${(stats.hits / stats.n * 100).toFixed(0)}%`;
+    html += `<div style="margin-top:8px;font-size:10px;color:#94a2b4;line-height:1.5">
+      Bin hit rate: <b style="color:#dbe4f0">${stats.hits}/${stats.n} (${pctTxt})</b>
+      ${stats.bias != null ? ` · point bias ${stats.bias >= 0 ? "+" : ""}${stats.bias.toFixed(1)}° · MAE ${stats.mae.toFixed(1)}°` : ""}
+      ${stats.n < 15 ? `<br><span style="color:#7e8ea4">⚠ ${stats.n} graded day${stats.n === 1 ? "" : "s"} — hit rate means little before ~15–20.</span>` : ""}
+    </div>`;
+  }
+
+  html += `<div style="margin-top:7px;font-size:9px;color:#56657a">source: NWS CLISEA via api.weather.gov · <a href="#" onclick="fetchCLI(true);return false" style="color:#60a5fa">↻ check now</a></div>`;
+  bodyEl.innerHTML = html;
+}
+
 function renderDrift() {
   const bodyEl = document.getElementById("drift-body");
   const statusEl = document.getElementById("drift-status");
@@ -1970,6 +2175,7 @@ function renderAll() {
   renderProjection();
   renderAICall();
   renderDrift();
+  renderScorecard();
   renderConditions();
   renderNearbyStations();
   renderSynopticStations();
@@ -2902,6 +3108,8 @@ document.getElementById("clock").textContent = fmtClock();
 setInterval(() => { document.getElementById("clock").textContent = fmtClock(); }, 1000);
 refresh();
 setInterval(refresh, 300_000); // refresh every 5 min (model data doesn't change faster)
+fetchCLI();                       // official climate reports: on load…
+setInterval(() => fetchCLI(), 1_800_000); // …and every 30 min (CLI only updates ~2×/day)
 setInterval(() => { if (MAP.inited) { loadRadar(); loadWindCloud(); } }, 300_000);
 setInterval(renderStatus, 5000);
 window.addEventListener("resize", () => { renderChart(); if (MAP.map) { try { MAP.map.invalidateSize(); } catch(e){} } });
