@@ -2425,20 +2425,57 @@ async function pollLive1m(force) {
     const r = await fetch(s.url);
     if (!r.ok) throw new Error("HTTP " + r.status);
     const j = await r.json();
-    const arr = Array.isArray(j) ? j : (j.points || j.data || j.obs || []);
-    const today = climateDayOfUTC(now);
-    const pts = {};                                   // dedupe by minute, current climate day only
-    (s.points || []).forEach(p => { if (climateDayOfUTC(p.t) === today) pts[Math.floor(p.t / 60000)] = p; });
+    if (j && j.SUMMARY && j.SUMMARY.RESPONSE_CODE === 2) {
+      throw new Error(String(j.SUMMARY.RESPONSE_MESSAGE || "no access").split(".")[0]);
+    }
+    let arr;
+    if (j && Array.isArray(j.STATION) && j.STATION[0] && j.STATION[0].OBSERVATIONS) {
+      // Synoptic timeseries shape: zip date_time[] + air_temp_set_1[]
+      const o = j.STATION[0].OBSERVATIONS;
+      const dts = o.date_time || [];
+      const tmp = o.air_temp_set_1 || [];
+      arr = dts.map((dt, i) => ({
+        t: (/Z$|[+-]\d\d:?\d\d$/.test(dt) ? dt : dt + "Z"),
+        tempF: tmp[i],
+      }));
+    } else {
+      arr = Array.isArray(j) ? j : (j.points || j.data || j.obs || []);
+    }
+    const keepFrom = now - 4 * 86400 * 1000;          // retain the whole trial window
+    const pts = {};                                    // dedupe by minute
+    (s.points || []).forEach(p => { if (p.t >= keepFrom) pts[Math.floor(p.t / 60000)] = p; });
     arr.map(l1mParsePoint).filter(Boolean).forEach(p => {
-      if (climateDayOfUTC(p.t) === today) pts[Math.floor(p.t / 60000)] = p;
+      if (p.t >= keepFrom) pts[Math.floor(p.t / 60000)] = p;
     });
-    s.points = Object.values(pts).sort((a, b) => a.t - b.t).slice(-1600);
+    s.points = Object.values(pts).sort((a, b) => a.t - b.t).slice(-6500);
     s.error = null;
   } catch (e) {
     s.error = String((e && e.message) || e);
   }
   saveL1M(s);
   renderLive1m();
+}
+
+// One-tap: build the KSEA1M timeseries URL from the saved Synoptic token
+function l1mUseSynoptic() {
+  const tok = getSynopticToken();
+  if (!tok) { alert("No Synoptic token saved — add it in Live Conditions first."); return; }
+  l1mSetUrl(`https://api.synopticdata.com/v2/stations/timeseries?stid=KSEA1M&recent=180&vars=air_temp&units=temp|F&obtimezone=utc&token=${tok}`);
+}
+
+// Export everything collected during the trial as CSV
+function l1mExport() {
+  const pts = (loadL1M().points || []);
+  if (!pts.length) { alert("No points stored yet."); return; }
+  let csv = "time_utc,time_pacific,tempF\n";
+  pts.forEach(p => {
+    const d = new Date(p.t);
+    csv += `${d.toISOString()},${d.toLocaleString("en-US", { timeZone: TZ })},${p.f}\n`;
+  });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = "ksea1m_oneminute.csv";
+  document.body.appendChild(a); a.click(); a.remove();
 }
 
 function renderLive1m() {
@@ -2453,10 +2490,12 @@ function renderLive1m() {
 
   if (!s.url) {
     if (statusEl) statusEl.textContent = "off";
-    bodyEl.innerHTML = urlRow + `<div style="font-size:10.5px;color:#94a2b4;line-height:1.55">
-      Sleeping until a 1-min source exists. The play: register for NOAA <b>MADIS</b> (free, takes days to approve),
-      then a small Termux relay script polls MADIS and serves JSON here — Claude writes that script the day access lands.
-      Even 3–5 min late, between-mark blips permanently raise the known settle floor.</div>`;
+    const tok = getSynopticToken();
+    bodyEl.innerHTML = urlRow + `<div style="font-size:10.5px;color:#94a2b4;line-height:1.55">${
+      tok
+        ? `Your Synoptic trial has HF-ASOS enabled — <a href="#" onclick="l1mUseSynoptic();return false" style="color:#34d399;font-weight:600">▶ connect KSEA1M now</a> (uses your saved token).`
+        : `Sleeping until a 1-min source exists (Synoptic KSEA1M or a MADIS relay). Save a Synoptic token in Live Conditions, then a connect button appears here.`
+    }</div>`;
     return;
   }
 
@@ -2474,8 +2513,11 @@ function renderLive1m() {
 
   const last = pts[pts.length - 1];
   const ageMin = (Date.now() - last.t) / 60000;
-  let mx = pts[0];
-  pts.forEach(p => { if (p.f > mx.f) mx = p; });
+  const today = climateDayOfUTC(Date.now());
+  let todayPts = pts.filter(p => climateDayOfUTC(p.t) === today);
+  if (!todayPts.length) todayPts = pts;
+  let mx = todayPts[0];
+  todayPts.forEach(p => { if (p.f > mx.f) mx = p; });
 
   // visible high from the regular feed, for comparison
   let visHigh = state.current && state.current.tempF != null ? state.current.tempF : null;
@@ -2500,7 +2542,22 @@ function renderLive1m() {
   } else if (visHigh != null) {
     html += `<div style="margin-top:6px;font-size:10px;color:#94a2b4">No invisible blips so far — 1-min max agrees with the visible feed (${visHigh.toFixed(1)}°).</div>`;
   }
+  // Precision check: is this feed tenths, or the whole-°C artifact lane?
+  const sample = pts.slice(-60);
+  if (sample.length >= 10) {
+    const nArt = sample.filter(p => {
+      const c = (p.f - 32) * 5 / 9;
+      return Math.abs(c - Math.round(c)) < 0.06;
+    }).length;
+    const frac = nArt / sample.length;
+    html += frac >= 0.9
+      ? `<div style="margin-top:6px;font-size:10px;color:#fbbf24">feed precision: whole-°C lane — values step in 1.8°F; sub-degree blips invisible here.</div>`
+      : frac <= 0.5
+        ? `<div style="margin-top:6px;font-size:10px;color:#34d399">feed precision: tenths ✓ — this is the exact settlement lane.</div>`
+        : `<div style="margin-top:6px;font-size:10px;color:#94a2b4">feed precision: mixed — watching.</div>`;
+  }
   if (ageMin > 10) html += `<div style="margin-top:5px;font-size:10px;color:#fca5a5">⚠ feed stale (${ageMin.toFixed(0)} min) — relay may be down.</div>`;
+  html += `<div style="margin-top:6px;font-size:9px;color:#56657a">${pts.length} pts stored (trial window) · <a href="#" onclick="l1mExport();return false" style="color:#60a5fa">⬇ export CSV</a></div>`;
   bodyEl.innerHTML = html;
 }
 
