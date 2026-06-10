@@ -1,0 +1,2910 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a1530">
+<title>KSEA Forecast · High Projection</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    color: #e8eef6;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+    font-size: 13px; line-height: 1.4; -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  html { background: #0a1530; }
+  body { padding: 12px; max-width: 680px; margin: 0 auto; padding-bottom: 60px;
+    background:
+      radial-gradient(circle at 82% 6%, rgba(120,160,220,0.20) 0%, transparent 32%),
+      linear-gradient(180deg, #0a1530 0%, #0f1d3d 45%, #13244a 100%);
+    background-attachment: fixed;
+  }
+  /* faint starfield behind everything (MSN night-sky vibe) */
+  body::before {
+    content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background-image:
+      radial-gradient(1px 1px at 12% 18%, rgba(255,255,255,0.5), transparent),
+      radial-gradient(1px 1px at 28% 42%, rgba(255,255,255,0.32), transparent),
+      radial-gradient(1px 1px at 47% 11%, rgba(255,255,255,0.45), transparent),
+      radial-gradient(1px 1px at 63% 31%, rgba(255,255,255,0.28), transparent),
+      radial-gradient(1.3px 1.3px at 78% 21%, rgba(255,255,255,0.5), transparent),
+      radial-gradient(1px 1px at 88% 47%, rgba(255,255,255,0.32), transparent),
+      radial-gradient(1px 1px at 38% 58%, rgba(255,255,255,0.24), transparent);
+  }
+  /* keep panels above starfield */
+  body > * { position: relative; z-index: 1; }
+  input { font: inherit; color: inherit; }
+  input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type=number] { -moz-appearance: textfield; }
+
+  .header {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 16px 6px 12px;
+    margin: 0 0 6px;
+    position: relative;
+  }
+  .station-id { font-size: 10px; letter-spacing: 0.28em; color: #8ba0bd; text-transform: uppercase; }
+  .header h1 { font-size: 20px; font-weight: 600; color: #f4f7fb; margin-top: 4px; letter-spacing: -0.01em; }
+  .clock { font-size: 13px; color: #cdd9e8; font-variant-numeric: tabular-nums; text-align: right; }
+  .clock-tz { font-size: 10px; color: #8ba0bd; letter-spacing: 0.15em; text-align: right; }
+
+  .status { display: flex; gap: 12px; align-items: center; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #9fb0c4; padding: 0 6px 8px; flex-wrap: wrap; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: middle; }
+  .dot.live { background: #34d399; box-shadow: 0 0 8px rgba(52,211,153,0.7); animation: pulse 2s infinite; }
+  .dot.err { background: #f87171; } .dot.load { background: #fbbf24; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* Day selector */
+  .day-strip { display: flex; gap: 8px; overflow-x: auto; padding: 6px 4px 12px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .day-strip::-webkit-scrollbar { display: none; }
+  .day-chip {
+    flex: 0 0 auto; min-width: 88px; padding: 12px 14px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.045); border-radius: 14px; cursor: pointer; text-align: center;
+    transition: all 0.15s;
+  }
+  .day-chip.active { border-color: rgba(251,191,36,0.7); background: rgba(251,191,36,0.10); box-shadow: 0 4px 18px rgba(251,191,36,0.18); }
+  .day-chip .dname { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #8ba0bd; }
+  .day-chip.active .dname { color: #fcd34d; }
+  .day-chip .dicon { font-size: 21px; line-height: 1; margin: 6px 0 3px; }
+  .day-chip .dhi { font-size: 20px; font-variant-numeric: tabular-nums; color: #f4f7fb; }
+  .day-chip.active .dhi { color: #fcd34d; }
+  .day-chip .dsub { font-size: 9px; color: #8ba0bd; font-variant-numeric: tabular-nums; }
+  .day-chip .dtag { font-size: 9px; color: #7e8ea4; margin-top: 3px; text-transform: lowercase; letter-spacing: 0.02em; }
+  .day-chip.active .dtag { color: #fcd34d; }
+
+  .panel {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px; margin-top: 12px; overflow: hidden;
+    box-shadow: 0 6px 22px rgba(0,0,0,0.28);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  .panel-head { padding: 11px 16px; border-bottom: 1px solid rgba(255,255,255,0.07); display: flex; justify-content: space-between; align-items: center;
+    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: #8ba0bd; }
+  .panel-head .accent { color: #fcd34d; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+  .panel-body { padding: 14px 16px; }
+
+  .stat-grid { display: grid; gap: 14px; }
+  .cols-2 { grid-template-columns: 1fr 1fr; } .cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .stat label { display: block; font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: #8ba0bd; margin-bottom: 5px; }
+  .stat .v { font-size: 23px; font-variant-numeric: tabular-nums; color: #f4f7fb; line-height: 1; }
+  .stat .v.accent { color: #fcd34d; } .stat .v.muted { color: #9fb0c4; }
+  .stat .v.pos { color: #34d399; } .stat .v.neg { color: #f87171; }
+  .stat .v.hero { font-size: 46px; font-weight: 300; letter-spacing: -0.02em; }
+  .stat .u { font-size: 11px; color: #8ba0bd; margin-left: 3px; }
+  .stat .sub { font-size: 9px; color: #94a2b4; margin-top: 5px; font-variant-numeric: tabular-nums; line-height: 1.4; }
+
+  .bucket-row { display: grid; grid-template-columns: 56px 1fr 46px; gap: 8px; align-items: center; padding: 3px 0; }
+  .bucket-label { font-size: 11px; font-variant-numeric: tabular-nums; color: #aab6c6; }
+  .bucket-label.most { color: #fcd34d; font-weight: 600; }
+  .bar-track { height: 16px; background: rgba(255,255,255,0.07); border-radius: 8px; overflow: hidden; }
+  .bar-fill { height: 100%; background: rgba(255,255,255,0.18); border-radius: 8px; transition: width 0.5s ease; }
+  .bar-fill.most { background: linear-gradient(90deg, #f59e0b, #fcd34d); }
+  .bucket-pct { text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; color: #9fb0c4; }
+  .bucket-pct.most { color: #fcd34d; font-weight: 600; }
+
+  .chart-wrap { width: 100%; height: 200px; position: relative; }
+  .chart-wrap svg { width: 100%; height: 100%; display: block; }
+  .chart-legend { display: flex; gap: 14px; margin-top: 10px; font-size: 9px; color: #9fb0c4; }
+  .chart-legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .lg-swatch { width: 10px; height: 2px; display: inline-block; border-radius: 1px; }
+
+  .footer { margin-top: 18px; padding: 14px 6px; border-top: 1px solid rgba(255,255,255,0.07); font-size: 10px; color: #8ba0bd; line-height: 1.6; }
+  .footer .lbl { color: #6f7f96; text-transform: uppercase; letter-spacing: 0.15em; margin-bottom: 4px; }
+  .err-box { background: rgba(248,113,113,0.12); border: 1px solid rgba(248,113,113,0.4); color: #fca5a5; padding: 9px 12px; font-size: 11px; margin-top: 8px; border-radius: 8px; }
+  .map-btn {
+    font: inherit; font-size: 11px; background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12); padding: 6px 13px; border-radius: 9px;
+    color: #cdd9e8; cursor: pointer; transition: all 0.15s;
+  }
+  .map-btn.on { background: linear-gradient(90deg, #f59e0b, #fcd34d); border-color: transparent; color: #1a1205; font-weight: 600; }
+  .leaflet-container { font-family: inherit; }
+</style>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="station-id">KSEA · Sea-Tac Intl · 47.45N 122.31W</div>
+    <h1>High Projection</h1>
+  </div>
+  <div>
+    <div class="clock" id="clock">--:--:--</div>
+    <div class="clock-tz">PDT</div>
+  </div>
+</div>
+
+<div class="status">
+  <div><span class="dot load" id="status-dot"></span><span id="status-label">loading</span></div>
+  <div id="fetch-age" style="color:rgba(255,255,255,0.85);text-shadow:0 1px 2px rgba(0,0,0,0.3)">—</div>
+  <div id="members-info" style="color:rgba(255,255,255,0.85);text-shadow:0 1px 2px rgba(0,0,0,0.3)"></div>
+</div>
+
+<div id="error" style="display:none"></div>
+
+<!-- DAY SELECTOR -->
+<div class="day-strip" id="day-strip"></div>
+
+<!-- SELECTED DAY SUMMARY -->
+<div class="panel">
+  <div class="panel-head"><span id="sel-day-title">Projection</span><span class="accent" id="sel-day-conf"></span></div>
+  <div class="panel-body">
+    <div id="day-summary" style="font-size:13px;line-height:1.5;color:#d8cfc2;margin:0 0 14px;padding:10px 12px;background:rgba(251,191,36,0.10);border-left:2px solid #fcd34d;border-radius:4px">—</div>
+    <div class="stat-grid cols-3" id="proj-stats"><div style="color:#94a2b4">loading ensemble…</div></div>
+    <div id="calib-note" style="font-size:10px;color:#94a2b4;margin-top:8px;line-height:1.5"></div>
+    <div id="current-ticker" style="margin-top:16px"></div>
+    <div id="boundary-bar" style="margin-top:16px"></div>
+  </div>
+</div>
+
+<!-- AI DAILY CALL (locked once per day) -->
+<div class="panel" id="aicall-panel">
+  <div class="panel-head"><span>🤖 AI Daily Call</span><span class="accent" id="aicall-conf">—</span></div>
+  <div class="panel-body">
+    <div class="stat-grid cols-3" id="aicall-stats"><div style="color:#94a2b4">waiting for model…</div></div>
+    <div id="aicall-why" style="font-size:12px;line-height:1.55;color:#dbe4f0;margin-top:14px;padding:11px 13px;background:rgba(96,165,250,0.09);border-left:2px solid #60a5fa;border-radius:4px"></div>
+    <div id="aicall-meta" style="font-size:9px;color:#7e8ea4;margin-top:9px;display:flex;justify-content:space-between;align-items:center"></div>
+  </div>
+</div>
+
+<!-- DRIFT VS FORECAST (intraday nowcast, today only) -->
+<div class="panel" id="drift-panel">
+  <div class="panel-head"><span>📡 Tracking vs Forecast</span><span class="accent" id="drift-status">—</span></div>
+  <div class="panel-body" id="drift-body"></div>
+</div>
+
+<!-- LIVE CONDITIONS SUMMARY (today only) -->
+<div class="panel" id="conditions-panel">
+  <div class="panel-head">
+    <span>Live Conditions</span>
+    <span class="accent" id="conditions-src"></span>
+  </div>
+  <div class="panel-body">
+    <div id="conditions-summary" style="font-size:13px;color:#eef3fa;line-height:1.5;margin-bottom:10px">—</div>
+    <div id="conditions-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;font-size:11px"></div>
+    <div id="hit-probability" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.08)"></div>
+  </div>
+</div>
+
+<!-- LEAD INDICATORS (nearby station freshness arbitrage) -->
+<div class="panel" id="leads-panel">
+  <div class="panel-head">
+    <span>Lead Indicators</span>
+    <span class="accent" id="leads-signal">no signal</span>
+  </div>
+  <div class="panel-body">
+    <div id="leads-summary" style="font-size:11px;color:#aab6c6;margin-bottom:10px;line-height:1.5">checking nearby stations…</div>
+    <div id="leads-grid" style="display:grid;grid-template-columns:54px 70px 1fr 64px;gap:6px 8px;font-size:11px;align-items:center"></div>
+    <div style="font-size:9px;color:#9ca3af;margin-top:8px;line-height:1.5">If a nearby ASOS is fresher and divergent, KSEA's next update will likely move toward it. South wind warms KSEA first; north wind warms KBFI first.</div>
+
+    <!-- Synoptic close-in mesonet network -->
+    <div id="synoptic-section" style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-size:9px;letter-spacing:0.15em;color:#9ca3af;text-transform:uppercase">Close-in network (≤6 mi)</span>
+        <span id="synoptic-status" style="font-size:9px;color:#9ca3af">no token</span>
+      </div>
+      <div id="synoptic-grid" style="display:grid;grid-template-columns:1fr 66px 1fr 54px;gap:5px 8px;font-size:11px;align-items:center"></div>
+      <div id="synoptic-setup" style="margin-top:6px">
+        <div style="font-size:10px;color:#94a2b4;line-height:1.5;margin-bottom:6px">Pulls the closest CWOP/PWS/mesonet stations within 6 miles — the sensors actually surrounding the airport. Needs a free Synoptic token (<span style="color:#f59e0b">synopticdata.com → sign up → copy token</span>).</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="synoptic-token-input" type="text" placeholder="paste Synoptic token" style="flex:1;min-width:0;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.14);padding:5px 8px;border-radius:3px;color:#eef3fa;font-size:11px">
+          <button onclick="saveSynopticToken()" style="font:inherit;font-size:10px;background:#fbbf24;border:none;padding:5px 12px;border-radius:3px;color:#1a1205;cursor:pointer;font-weight:600">Save</button>
+        </div>
+        <div id="synoptic-token-status" style="font-size:9px;color:#9ca3af;margin-top:4px"></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <div style="font-size:10px;color:#94a2b4">
+        <div style="font-size:9px;letter-spacing:0.15em;color:#9ca3af;text-transform:uppercase;margin-bottom:2px">Calibration log</div>
+        <div id="cal-log-status">0 observations · logger ready</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button onclick="calLogDownloadCSV()" style="font:inherit;font-size:10px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.14);padding:4px 10px;border-radius:3px;color:#aab6c6;cursor:pointer">Core CSV</button>
+        <button onclick="synLogDownloadCSV()" style="font:inherit;font-size:10px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.14);padding:4px 10px;border-radius:3px;color:#aab6c6;cursor:pointer">Stations CSV</button>
+        <button onclick="calLogClear()" style="font:inherit;font-size:10px;background:transparent;border:1px solid rgba(255,255,255,0.14);padding:4px 8px;border-radius:3px;color:#9ca3af;cursor:pointer">Clear</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- BUCKET PROBABILITIES -->
+<div class="panel">
+  <div class="panel-head"><span>High Probability</span><span class="accent" id="prob-src"></span></div>
+  <div class="panel-body">
+    <div id="bucket-bars"></div>
+    <div id="prob-note" style="font-size:9px;color:#9fb0c4;margin-top:8px"></div>
+  </div>
+</div>
+
+<!-- CALIBRATION -->
+<div class="panel" id="calib-panel">
+  <div class="panel-head" style="cursor:pointer" onclick="toggleCalibExpand()">
+    <span>Calibration <span id="calib-expand-arrow" style="color:#9ca3af;font-size:11px">▸</span></span>
+    <span class="accent" id="calib-mode">on</span>
+  </div>
+  <div id="calib-collapsed-row" style="padding:8px 14px;font-size:11px;color:#aab6c6;border-top:1px solid rgba(255,255,255,0.06)">
+    <span id="calib-collapsed-summary">bias −0.8°F · spread widened to realized error</span>
+  </div>
+  <div class="panel-body" id="calib-expanded" style="display:none;padding-top:6px">
+    <div style="font-size:11px;color:#aab6c6;line-height:1.6">
+      Raw GFS ensembles are over-confident (spread too narrow) and run warm. This layer shifts the forecast cooler by the measured bias and widens the spread to match how far off day-ahead forecasts actually land — so the bucket percentages reflect real uncertainty instead of false precision.
+    </div>
+    <div id="calib-params" style="font-size:10px;color:#94a2b4;margin-top:10px;line-height:1.7;font-variant-numeric:tabular-nums"></div>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:11px;color:#aab6c6;display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input id="calib-enabled" type="checkbox" checked style="width:14px;height:14px;cursor:pointer">
+        Calibration ON
+      </label>
+      <span style="font-size:11px;color:#aab6c6;display:flex;align-items:center;gap:6px">
+        Bias
+        <input id="calib-bias" type="number" step="0.1" value="0.8" style="width:56px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.14);padding:3px 6px;border-radius:3px;color:#eef3fa;font-variant-numeric:tabular-nums;text-align:right;font-size:11px">
+        °F
+      </span>
+    </div>
+    <div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <div style="font-size:10px;color:#94a2b4">
+        <div style="font-size:9px;letter-spacing:0.15em;color:#9ca3af;text-transform:uppercase;margin-bottom:2px">Forecast-accuracy log</div>
+        <div id="acc-log-status">0 days logged</div>
+      </div>
+      <button onclick="accLogDownloadCSV()" style="font:inherit;font-size:10px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.14);padding:4px 10px;border-radius:3px;color:#aab6c6;cursor:pointer">Forecast CSV</button>
+    </div>
+    <div style="font-size:9px;color:#9ca3af;margin-top:8px;line-height:1.5">The numbers above are starting estimates from the day-1 backtest. The accuracy log records each day's forecast vs. the actual high so they can be refit to your real error over time. Export and send me the CSV after a couple weeks.</div>
+  </div>
+</div>
+
+<!-- RADAR / WIND / CLOUD MAP -->
+<div class="panel" id="map-panel">
+  <div class="panel-head"><span>Radar · Wind · Cloud</span><span class="accent" id="map-status">loading map…</span></div>
+  <div class="panel-body">
+    <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+      <button id="layer-radar" onclick="toggleMapLayer('radar')" class="map-btn">Radar</button>
+      <button id="layer-wind" onclick="toggleMapLayer('wind')" class="map-btn on">Wind</button>
+      <button id="layer-cloud" onclick="toggleMapLayer('cloud')" class="map-btn on">Cloud</button>
+      <div style="flex:1"></div>
+      <button id="radar-play" onclick="radarPlayToggle()" class="map-btn" style="display:none">▶ play</button>
+    </div>
+    <div id="ksea-map" style="height:300px;border-radius:8px;overflow:hidden;background:#0f1d3d"></div>
+    <div id="radar-time" style="font-size:10px;color:#94a2b4;margin-top:6px;text-align:center;font-variant-numeric:tabular-nums"></div>
+    <div style="font-size:9px;color:#9ca3af;margin-top:6px;line-height:1.5">Radar = precipitation (won't show dry marine stratus). Wind arrows point the way air is moving — watch for onshore SW flow. Cloud shading is model cloud-cover, which does capture the marine layer. Satellite loops were dropped by RainViewer's free tier Jan 2026.</div>
+  </div>
+</div>
+
+<!-- HOURLY CURVE -->
+<div class="panel">
+  <div class="panel-head"><span>Hourly Curve + Cloud Cover</span><span class="accent">°F · local</span></div>
+  <div class="panel-body">
+    <div class="chart-wrap" id="chart"></div>
+    <div class="chart-legend">
+      <span><span class="lg-swatch" style="background:#fcd34d"></span>ens median</span>
+      <span><span class="lg-swatch" style="background:rgba(251,191,36,0.5);height:8px"></span>10–90% band</span>
+      <span><span class="lg-swatch" style="background:#60a5fa;height:8px;opacity:0.4"></span>cloud cover</span>
+    </div>
+  </div>
+</div>
+
+<!-- CURRENT CONDITIONS (today only) -->
+<div class="panel" id="current-panel">
+  <div class="panel-head"><span>Current Conditions</span><span class="accent" id="cur-time"></span></div>
+  <div class="panel-body">
+    <div class="stat-grid cols-3" id="current-state"><div style="color:#94a2b4">—</div></div>
+  </div>
+</div>
+
+<!-- ALERTS -->
+<div class="panel" id="alerts-panel">
+  <div class="panel-head" style="cursor:pointer" onclick="toggleAlertsExpand()">
+    <span>Alerts <span id="alerts-expand-arrow" style="color:#9ca3af;font-size:11px">▸</span></span>
+    <span class="accent" id="alerts-mode">in-app</span>
+  </div>
+  <div id="alerts-collapsed-row" style="padding:8px 14px;font-size:11px;color:#aab6c6;border-top:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-between;align-items:center">
+    <span><span style="color:#34d399">●</span> ON · temp ≥<span id="alerts-summary-t">1.0</span>° · dew ≥<span id="alerts-summary-d">1.5</span>° · RH ≥<span id="alerts-summary-r">5</span>%</span>
+    <span id="alert-last-compact" style="color:#9ca3af;font-size:10px"></span>
+  </div>
+  <div class="panel-body" id="alerts-expanded" style="display:none;padding-top:6px">
+    <div id="alerts-permission-row" style="margin-bottom:8px;font-size:10px;color:#aab6c6">
+      <span id="alerts-perm-status">checking…</span>
+      <button id="alerts-perm-btn" style="margin-left:8px;font:inherit;font-size:10px;background:#fbbf24;border:none;padding:3px 8px;border-radius:3px;color:#1a1205;cursor:pointer;font-weight:600;display:none">Enable</button>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 70px 30px;gap:6px 8px;align-items:center;font-size:10px;color:#aab6c6">
+      <span>Temperature change ≥</span>
+      <input id="alert-temp" type="number" step="0.1" min="0" value="1.0" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.14);padding:3px 6px;border-radius:3px;color:#eef3fa;font-variant-numeric:tabular-nums;text-align:right;font-size:11px">
+      <span style="color:#94a2b4">°F</span>
+
+      <span>Dew point change ≥</span>
+      <input id="alert-dew" type="number" step="0.1" min="0" value="1.5" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.14);padding:3px 6px;border-radius:3px;color:#eef3fa;font-variant-numeric:tabular-nums;text-align:right;font-size:11px">
+      <span style="color:#94a2b4">°F</span>
+
+      <span>Humidity change ≥</span>
+      <input id="alert-rh" type="number" step="1" min="0" value="5" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.14);padding:3px 6px;border-radius:3px;color:#eef3fa;font-variant-numeric:tabular-nums;text-align:right;font-size:11px">
+      <span style="color:#94a2b4">%</span>
+    </div>
+
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:11px;color:#aab6c6;display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input id="alert-enabled" type="checkbox" checked style="width:14px;height:14px;cursor:pointer">
+        Alerts ON
+      </label>
+      <button id="alert-test-btn" style="font:inherit;font-size:10px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.14);padding:3px 10px;border-radius:3px;color:#aab6c6;cursor:pointer">Test</button>
+      <span id="alert-last" style="font-size:10px;color:#94a2b4;margin-left:auto"></span>
+    </div>
+
+    <div id="alert-history" style="margin-top:8px;font-size:10px;color:#94a2b4;max-height:80px;overflow-y:auto"></div>
+  </div>
+</div>
+
+<div class="footer">
+  <div class="lbl">Method</div>
+  <p>Forecast + ensemble from Open-Meteo (GFS ensemble, blended with HRRR short-range). Probabilities = spread across 31 ensemble members, smoothed with a 1.5°F kernel, integer-rounded per ASOS convention. Each member is a full NWP run that already assimilated current cloud/radar/satellite — the app reads their output, it does not re-simulate physics.</p>
+  <p style="margin-top:6px">Time-of-high = peak hour of each member's curve. Confidence band = 10th–90th percentile. Resolution authority remains the CLISEA daily report.</p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+"use strict";
+
+// =============================================================================
+// Config
+// =============================================================================
+const LAT = 47.45, LON = -122.31;
+const TZ = "America/Los_Angeles";
+const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
+  + `&current=temperature_2m,dew_point_2m,wind_speed_10m,wind_direction_10m,cloud_cover`
+  + `&hourly=temperature_2m,cloud_cover,wind_speed_10m,wind_direction_10m,precipitation_probability`
+  + `&daily=temperature_2m_max,temperature_2m_min`
+  + `&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=${TZ}&forecast_days=7`;
+const ENSEMBLE_URL = `https://ensemble-api.open-meteo.com/v1/ensemble?latitude=${LAT}&longitude=${LON}`
+  + `&hourly=temperature_2m&models=gfs_seamless&temperature_unit=fahrenheit&timezone=${TZ}&forecast_days=7`;
+
+// Buckets are generated per-day, centered on that day's projected high,
+// in 2°F bins matching Kalshi's odd-start structure (e.g. 81-82, 83-84).
+function generateBuckets(centerF) {
+  const c = Math.round(centerF);
+  const centerLo = c % 2 === 1 ? c : c - 1;  // odd start of the bin holding c
+  const bins = [];
+  bins.push({ label: `≤ ${centerLo - 5}°`, lo: -999, hi: centerLo - 5 });
+  for (let off = -4; off <= 4; off += 2) {
+    const lo = centerLo + off;
+    bins.push({ label: `${lo}–${lo + 1}`, lo, hi: lo + 1 });
+  }
+  bins.push({ label: `≥ ${centerLo + 6}°`, lo: centerLo + 6, hi: 999 });
+  return bins;
+}
+
+const WEEKDAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+// =============================================================================
+// State
+// =============================================================================
+const state = {
+  loading: true, error: null, lastFetch: null,
+  current: null,
+  days: [],          // [{date, label, hourly:[{hour,temp,cloud}], detMax, detMin}]
+  ensembleDays: {},  // date -> { members:[{maxF, peakHour, curve:[...] }], hours:[...] }
+  nMembers: 0,
+  selectedDate: null,
+};
+
+// =============================================================================
+// Helpers
+// =============================================================================
+const fmtClock = () => {
+  // local time in Seattle
+  const s = new Date().toLocaleTimeString("en-US", { timeZone: TZ, hour12: false });
+  return s;
+};
+const dayLabel = (dateStr, idx) => {
+  if (idx === 0) return "Today";
+  if (idx === 1) return "Tmrw";
+  const d = new Date(dateStr + "T12:00:00");
+  return WEEKDAYS[d.getDay()];
+};
+const fmtHour = (h) => {
+  const hr = Math.floor(h);
+  const m = Math.round((h - hr) * 60);
+  const ampm = hr >= 12 ? "PM" : "AM";
+  let h12 = hr % 12; if (h12 === 0) h12 = 12;
+  return `${h12}${m ? ":" + String(m).padStart(2,"0") : ""} ${ampm}`;
+};
+const quantile = (sorted, q) => {
+  if (sorted.length === 0) return null;
+  const pos = (sorted.length - 1) * q;
+  const base = Math.floor(pos), rest = pos - base;
+  return sorted[base + 1] !== undefined
+    ? sorted[base] + rest * (sorted[base + 1] - sorted[base])
+    : sorted[base];
+};
+
+// =============================================================================
+// Fetch + process
+// =============================================================================
+async function fetchAll() {
+  const [fRes, eRes] = await Promise.allSettled([
+    fetch(FORECAST_URL).then(r => { if (!r.ok) throw new Error("forecast " + r.status); return r.json(); }),
+    fetch(ENSEMBLE_URL).then(r => { if (!r.ok) throw new Error("ensemble " + r.status); return r.json(); }),
+  ]);
+
+  if (fRes.status !== "fulfilled") throw new Error(fRes.reason?.message || "forecast failed");
+  processForecast(fRes.value);
+
+  if (eRes.status === "fulfilled") {
+    processEnsemble(eRes.value);
+  } else {
+    state.nMembers = 0;  // will fall back to deterministic + synthetic spread
+  }
+
+  // Override Open-Meteo's grid "current" with REAL ASOS observation.
+  // Pull api.weather.gov + Synoptic-KSEA + nearby networks in parallel, then use
+  // whichever live reading has the newest timestamp (freshest-wins).
+  const [live, nearby, , synK] = await Promise.all([
+    fetchLiveObs(), fetchNearbyStations(), fetchSynopticNearby(), fetchSynopticKSEA()
+  ]);
+
+  let best = null, bestSrc = null;
+  if (live && live.latest && live.latest.tempF != null) { best = live.latest; bestSrc = live.source; }
+  if (synK && synK.latest && synK.latest.tempF != null) {
+    if (!best || synK.latest.time > best.time) { best = synK.latest; bestSrc = synK.source; }
+  }
+  if (best) {
+    state.current = {
+      tempF: best.tempF,
+      dewF: best.dewF,
+      windMph: best.windMph,
+      windDir: best.windDir,
+      cloud: state.current ? state.current.cloud : null, // keep model cloud %
+      time: best.time.toISOString(),
+      source: bestSrc,
+    };
+    state.obsHistory = (live && live.history) ? live.history : null;
+  } else {
+    state.obsHistory = null;
+  }
+  state.nearbyStations = nearby;
+}
+
+// Nearby airport ASOS stations — same NWS API as KSEA. Used as freshness
+// proxy: if a nearby station is reading warmer/cooler than KSEA AND fresher,
+// KSEA's next update will likely move toward it.
+const NEARBY_STATIONS = [
+  { id: "KBFI", name: "Boeing Field",    dist: "6 mi N"   },
+  { id: "KRNT", name: "Renton Muni",     dist: "6 mi NE"  },
+  { id: "KTIW", name: "Tacoma Narrows",  dist: "17 mi SW" },
+  { id: "KPWT", name: "Bremerton Natl",  dist: "21 mi W"  },
+  { id: "KPLU", name: "Puyallup/Thun",   dist: "24 mi S"  },
+];
+
+async function fetchNearbyStations() {
+  const results = {};
+  await Promise.all(NEARBY_STATIONS.map(async s => {
+    try {
+      const r = await fetch(`https://api.weather.gov/stations/${s.id}/observations?limit=10`,
+        { headers: { "Accept": "application/geo+json" } });
+      if (!r.ok) throw new Error("status " + r.status);
+      const j = await r.json();
+      const features = j.features || [];
+      const obs = features.map(f => {
+        const p = f.properties || {};
+        const tempC = p.temperature && p.temperature.value;
+        if (tempC == null || !p.timestamp) return null;
+        return { time: new Date(p.timestamp), tempC, tempF: tempC * 9/5 + 32 };
+      }).filter(Boolean).sort((a, b) => b.time - a.time);
+      if (obs.length === 0) throw new Error("no obs");
+      results[s.id] = obs[0];
+    } catch (e) {
+      results[s.id] = null;
+    }
+  }));
+  return results;
+}
+
+// =============================================================================
+// Synoptic Data — close-in mesonet / CWOP / PWS network around KSEA.
+// Free open-access token required (synopticdata.com). Queries latest obs from
+// the closest stations within a radius — the dense network NWS doesn't expose.
+// Token is stored locally on this device only, never transmitted anywhere but
+// Synoptic. Fails soft: any error here never breaks the rest of the app.
+// =============================================================================
+const SYNOPTIC_TOKEN_KEY = "ksea_synoptic_token";
+const SYNOPTIC_RADIUS_MI = 6;
+const SYNOPTIC_LIMIT = 14;
+
+function haversineMi(lat1, lon1, lat2, lon2) {
+  const R = 3958.8, toRad = x => x * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// Initial bearing from point 1 → point 2, in degrees (0=N, 90=E)
+function bearingDeg(lat1, lon1, lat2, lon2) {
+  const toRad = x => x * Math.PI / 180;
+  const φ1 = toRad(lat1), φ2 = toRad(lat2), Δλ = toRad(lon2 - lon1);
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+  let deg = Math.atan2(y, x) * 180 / Math.PI;
+  return (deg + 360) % 360;
+}
+// 8-point compass for clean N/NE/E/SE/S/SW/W/NW labels
+function compass8(deg) {
+  if (deg == null || isNaN(deg)) return null;
+  const dirs = ["N","NE","E","SE","S","SW","W","NW"];
+  return dirs[Math.round(deg / 45) % 8];
+}
+
+function getSynopticToken() {
+  try { return localStorage.getItem(SYNOPTIC_TOKEN_KEY) || ""; } catch (e) { return ""; }
+}
+
+function saveSynopticToken() {
+  const input = document.getElementById("synoptic-token-input");
+  const statusEl = document.getElementById("synoptic-token-status");
+  if (!input) return;
+  const tok = input.value.trim();
+  try {
+    if (tok) {
+      localStorage.setItem(SYNOPTIC_TOKEN_KEY, tok);
+      if (statusEl) { statusEl.textContent = "Token saved. Fetching close-in stations…"; statusEl.style.color = "#34d399"; }
+    } else {
+      localStorage.removeItem(SYNOPTIC_TOKEN_KEY);
+      if (statusEl) { statusEl.textContent = "Token cleared."; statusEl.style.color = "#9ca3af"; }
+    }
+  } catch (e) {}
+  fetchSynopticNearby().then(renderSynopticStations).catch(()=>{});
+}
+
+async function fetchSynopticNearby() {
+  const token = getSynopticToken();
+  if (!token) { state.synoptic = { stations: [], error: null, fetchedAt: null, noToken: true }; return; }
+  const url = `https://api.synopticdata.com/v2/stations/latest`
+    + `?radius=${LAT},${LON},${SYNOPTIC_RADIUS_MI}`
+    + `&limit=${SYNOPTIC_LIMIT}`
+    + `&vars=air_temp,dew_point_temperature`
+    + `&within=90&status=active&obtimezone=local&units=temp|F`
+    + `&token=${encodeURIComponent(token)}`;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    const code = j.SUMMARY && j.SUMMARY.RESPONSE_CODE;
+    if (code !== undefined && code !== 1) {
+      throw new Error((j.SUMMARY && j.SUMMARY.RESPONSE_MESSAGE) || "API error");
+    }
+    const stns = (j.STATION || []).map(s => {
+      const obs = s.OBSERVATIONS || {};
+      const t = obs.air_temp_value_1, d = obs.dew_point_temperature_value_1;
+      const tempF = t && typeof t.value === "number" ? t.value : null;
+      const dewF  = d && typeof d.value === "number" ? d.value : null;
+      const time  = t && t.date_time ? new Date(t.date_time) : null;
+      const lat = parseFloat(s.LATITUDE), lon = parseFloat(s.LONGITUDE);
+      let distMi = (!isNaN(lat) && !isNaN(lon)) ? haversineMi(LAT, LON, lat, lon)
+                 : (s.DISTANCE != null ? parseFloat(s.DISTANCE) : null);
+      const dir = (!isNaN(lat) && !isNaN(lon)) ? compass8(bearingDeg(LAT, LON, lat, lon)) : null;
+      return { id: s.STID, name: s.NAME, tempF, dewF, time, distMi, dir };
+    }).filter(s => s.tempF != null && s.id !== "KSEA")
+      .sort((a,b) => (a.distMi ?? 999) - (b.distMi ?? 999));
+    state.synoptic = { stations: stns, error: null, fetchedAt: Date.now() };
+  } catch (e) {
+    state.synoptic = { stations: [], error: e.message || String(e), fetchedAt: Date.now() };
+  }
+}
+
+function renderSynopticStations() {
+  const grid = document.getElementById("synoptic-grid");
+  const setup = document.getElementById("synoptic-setup");
+  const statusEl = document.getElementById("synoptic-status");
+  if (!grid || !setup) return;
+  const token = getSynopticToken();
+  const syn = state.synoptic || { stations: [], noToken: true };
+
+  if (!token) {
+    grid.innerHTML = "";
+    setup.style.display = "";
+    if (statusEl) { statusEl.textContent = "no token"; statusEl.style.color = "#9ca3af"; }
+    return;
+  }
+  setup.style.display = "none";
+
+  if (syn.error) {
+    grid.innerHTML = `<div style="grid-column:1/-1;color:#f59e0b;font-size:10px">Synoptic: ${syn.error} — tap to re-enter token.</div>`;
+    grid.style.cursor = "pointer";
+    grid.onclick = () => { setup.style.display = ""; grid.onclick = null; };
+    if (statusEl) { statusEl.textContent = "error"; statusEl.style.color = "#f59e0b"; }
+    return;
+  }
+  grid.style.cursor = ""; grid.onclick = null;
+
+  const ksea = state.current;
+  const kseaTemp = ksea && ksea.tempF != null ? ksea.tempF : null;
+  const stns = syn.stations || [];
+  if (stns.length === 0) {
+    grid.innerHTML = `<div style="grid-column:1/-1;color:#9ca3af;font-size:10px">No close-in stations reporting in the last 90 min.</div>`;
+    if (statusEl) { statusEl.textContent = "0 stations"; statusEl.style.color = "#9ca3af"; }
+    return;
+  }
+
+  let html = `
+    <div style="color:#9ca3af;font-size:9px;letter-spacing:0.08em;text-transform:uppercase">STATION</div>
+    <div style="color:#9ca3af;font-size:9px;letter-spacing:0.08em;text-transform:uppercase">DIST · DIR</div>
+    <div style="color:#9ca3af;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;text-align:right">TEMP · AGE</div>
+    <div style="color:#9ca3af;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;text-align:right">VS KSEA</div>
+  `;
+  for (const s of stns) {
+    const age = s.time ? Math.max(0, (Date.now() - s.time.getTime())/60000) : null;
+    const delta = kseaTemp != null ? s.tempF - kseaTemp : null;
+    const dColor = delta == null ? "#9ca3af" : Math.abs(delta) < 0.5 ? "#9ca3af" : delta > 0 ? "#f59e0b" : "#60a5fa";
+    const ageColor = age != null && age < 20 ? "#34d399" : "#9ca3af";
+    const distDir = s.distMi != null ? `${s.distMi.toFixed(1)}mi${s.dir ? " " + s.dir : ""}` : "—";
+    html += `
+      <div style="color:#eef3fa;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(s.name||"").replace(/"/g,'')}">${s.id || s.name || "—"}</div>
+      <div style="color:#94a2b4;font-variant-numeric:tabular-nums">${distDir}</div>
+      <div style="text-align:right;color:#eef3fa;font-variant-numeric:tabular-nums">${s.tempF.toFixed(1)}°F <span style="color:${ageColor};font-size:10px">· ${age!=null?age.toFixed(0)+"m":"—"}</span></div>
+      <div style="text-align:right;color:${dColor};font-variant-numeric:tabular-nums">${delta==null?"—":(delta>0?"+":"")+delta.toFixed(1)}</div>
+    `;
+  }
+  grid.innerHTML = html;
+  if (statusEl) {
+    const ageMin = syn.fetchedAt ? Math.max(0,(Date.now()-syn.fetchedAt)/60000) : null;
+    statusEl.textContent = `${stns.length} stations${ageMin!=null?" · "+ageMin.toFixed(0)+"m":""}`;
+    statusEl.style.color = "#34d399";
+  }
+}
+
+// Fetch KSEA's latest observation from Synoptic — often fresher than
+// api.weather.gov. Returns same shape as fetchLiveObs's latest (single reading).
+async function fetchSynopticKSEA() {
+  const token = getSynopticToken();
+  if (!token) return null;
+  const url = `https://api.synopticdata.com/v2/stations/latest`
+    + `?stid=KSEA&vars=air_temp,dew_point_temperature,wind_speed,wind_direction`
+    + `&units=temp|F,speed|mph&obtimezone=utc&token=${encodeURIComponent(token)}`;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    const code = j.SUMMARY && j.SUMMARY.RESPONSE_CODE;
+    if (code !== undefined && code !== 1) throw new Error("api");
+    const s = (j.STATION || [])[0];
+    if (!s) return null;
+    const obs = s.OBSERVATIONS || {};
+    const t = obs.air_temp_value_1;
+    if (!t || typeof t.value !== "number" || !t.date_time) return null;
+    const d = obs.dew_point_temperature_value_1;
+    const ws = obs.wind_speed_value_1;
+    const wd = obs.wind_direction_value_1;
+    return {
+      latest: {
+        time: new Date(t.date_time),
+        tempF: t.value,
+        dewF: d && typeof d.value === "number" ? d.value : null,
+        windMph: ws && typeof ws.value === "number" ? ws.value : null,
+        windDir: wd && typeof wd.value === "number" ? wd.value : null,
+      },
+      source: "Synoptic KSEA",
+    };
+  } catch (e) {
+    console.log("[obs] synoptic KSEA failed:", e.message);
+    return null;
+  }
+}
+
+// Pulls REAL ASOS observation. Tries NWS 5-minute data first (matches NWS
+// timeseries page), falls back to aviationweather.gov METAR (~hourly).
+async function fetchLiveObs() {
+  // First try: api.weather.gov 5-min observations
+  try {
+    const r = await fetch("https://api.weather.gov/stations/KSEA/observations?limit=200",
+      { headers: { "Accept": "application/geo+json" } });
+    if (!r.ok) throw new Error("nws " + r.status);
+    const j = await r.json();
+    const features = j.features || [];
+    const readings = features.map(f => {
+      const p = f.properties || {};
+      const tempC = p.temperature && p.temperature.value;
+      const dewC  = p.dewpoint && p.dewpoint.value;
+      const wMps  = p.windSpeed && p.windSpeed.value;
+      const wDir  = p.windDirection && p.windDirection.value;
+      if (tempC == null || !p.timestamp) return null;
+      return {
+        time: new Date(p.timestamp),
+        tempC, tempF: tempC * 9/5 + 32,
+        dewC,  dewF: dewC != null ? dewC * 9/5 + 32 : null,
+        windMph: wMps != null ? wMps * 2.23694 : null,
+        windDir: wDir,
+      };
+    }).filter(Boolean).sort((a,b) => b.time - a.time);
+    if (readings.length === 0) throw new Error("no usable obs");
+    return { latest: readings[0], history: readings, source: "NWS ASOS 5-min" };
+  } catch (e) {
+    console.log("[obs] nws api failed:", e.message);
+  }
+
+  // Fallback: aviationweather.gov METAR
+  try {
+    const r = await fetch("https://aviationweather.gov/api/data/metar?ids=KSEA&format=json&hours=24&taf=false");
+    if (!r.ok) throw new Error("metar " + r.status);
+    const arr = await r.json();
+    if (!Array.isArray(arr) || arr.length === 0) throw new Error("empty metar");
+    const readings = arr.map(m => ({
+      time: new Date(m.obsTime || m.reportTime),
+      tempC: m.temp,
+      tempF: m.temp != null ? m.temp * 9/5 + 32 : null,
+      dewC: m.dewp,
+      dewF: m.dewp != null ? m.dewp * 9/5 + 32 : null,
+      windMph: m.wspd != null ? m.wspd * 1.15078 : null,
+      windDir: m.wdir,
+    })).filter(r => r.tempC != null && !isNaN(r.time)).sort((a,b) => b.time - a.time);
+    if (readings.length === 0) throw new Error("no temp in metar");
+    return { latest: readings[0], history: readings, source: "ASOS METAR" };
+  } catch (e) {
+    console.log("[obs] metar failed:", e.message);
+    return null;
+  }
+}
+
+function processForecast(j) {
+  // current
+  const c = j.current;
+  state.current = c ? {
+    tempF: c.temperature_2m, dewF: c.dew_point_2m,
+    windMph: c.wind_speed_10m, windDir: c.wind_direction_10m,
+    cloud: c.cloud_cover, time: c.time,
+  } : null;
+
+  // group hourly by local date
+  const H = j.hourly;
+  const byDate = {};
+  for (let i = 0; i < H.time.length; i++) {
+    const [date, hm] = H.time[i].split("T");
+    const hour = parseInt(hm.split(":")[0], 10);
+    (byDate[date] = byDate[date] || []).push({
+      hour, temp: H.temperature_2m[i], cloud: H.cloud_cover[i],
+      wind: H.wind_speed_10m ? H.wind_speed_10m[i] : null,
+      windDir: H.wind_direction_10m ? H.wind_direction_10m[i] : null,
+      precip: H.precipitation_probability ? H.precipitation_probability[i] : null,
+    });
+  }
+  const D = j.daily;
+  state.days = D.time.map((date, idx) => ({
+    date, idx, label: dayLabel(date, idx),
+    hourly: (byDate[date] || []).sort((a,b)=>a.hour-b.hour),
+    detMax: D.temperature_2m_max[idx],
+    detMin: D.temperature_2m_min[idx],
+  }));
+  if (!state.selectedDate && state.days.length) state.selectedDate = state.days[0].date;
+}
+
+function processEnsemble(j) {
+  const H = j.hourly;
+  const memberKeys = Object.keys(H).filter(k => /^temperature_2m_member\d+/.test(k));
+  // include control member if present (temperature_2m without suffix)
+  if (H.temperature_2m) memberKeys.unshift("temperature_2m");
+  state.nMembers = memberKeys.length;
+
+  // index times by date
+  const dateOf = H.time.map(t => t.split("T")[0]);
+  const hourOf = H.time.map(t => parseInt(t.split("T")[1].split(":")[0], 10));
+  const uniqueDates = [...new Set(dateOf)];
+
+  const ensembleDays = {};
+  for (const date of uniqueDates) {
+    const idxs = [];
+    for (let i = 0; i < dateOf.length; i++) if (dateOf[i] === date) idxs.push(i);
+    const members = [];
+    for (const key of memberKeys) {
+      const series = H[key];
+      let maxV = -Infinity, peakHour = null;
+      const curve = [];
+      for (const i of idxs) {
+        const v = series[i];
+        if (v == null) continue;
+        curve.push({ hour: hourOf[i], temp: v });
+        if (v > maxV) { maxV = v; peakHour = hourOf[i]; }
+      }
+      if (maxV > -Infinity) members.push({ maxF: maxV, peakHour, curve });
+    }
+    ensembleDays[date] = { members };
+  }
+  state.ensembleDays = ensembleDays;
+}
+
+// =============================================================================
+// Prediction math
+// =============================================================================
+// =============================================================================
+// Calibration layer — bias correction + ensemble dispersion calibration.
+//
+// WHY: raw GFS ensembles are under-dispersive (their spread is too narrow), which
+// makes the center-bucket probability overconfident. And the day-1 backtest showed
+// the forecast runs ~0.8°F warm. So we (1) shift the distribution cooler by the
+// measured bias, and (2) widen the predictive spread to match realized error, so
+// the bucket probabilities reflect how uncertain the forecast actually is.
+//
+// The default numbers below are STARTING ESTIMATES from the day-1 ERA5 backtest
+// (overall warm bias ~0.8°F; RMSE ~3.6°F; summer error roughly 2x winter). They're
+// intentionally rough — the forecast-accuracy logger collects real forecast-vs-high
+// pairs over time so these can be refit empirically. Calibration moves the numbers
+// in the correct direction (cooler + wider) even before that refinement.
+// =============================================================================
+const CALIB = {
+  enabled: true,
+  biasF: 0.8,                                       // forecast warm bias → subtract
+  seasonStdF: { winter: 2.2, spring: 3.0, summer: 4.6, fall: 3.0 }, // 1σ error, day-1
+  leadMult: { 0: 0.55, 1: 0.85, 2: 1.0, 3: 1.15 },  // today, tmrw, +2, +3 and beyond
+  kernelFloorF: 1.0,                                // predictive spread never collapses
+};
+
+function loadCalibOverrides() {
+  try {
+    const o = JSON.parse(localStorage.getItem("ksea_calib_v1") || "null");
+    if (o && typeof o === "object") {
+      if (typeof o.enabled === "boolean") CALIB.enabled = o.enabled;
+      if (typeof o.biasF === "number" && isFinite(o.biasF)) CALIB.biasF = o.biasF;
+    }
+  } catch (e) {}
+}
+function saveCalibOverrides() {
+  try { localStorage.setItem("ksea_calib_v1", JSON.stringify({ enabled: CALIB.enabled, biasF: CALIB.biasF })); } catch (e) {}
+}
+
+function seasonOf(date) {
+  const m = parseInt(date.slice(5,7),10);
+  if (m===12||m<=2) return "winter";
+  if (m<=5) return "spring";
+  if (m<=8) return "summer";
+  return "fall";
+}
+function leadIndexOf(date) {
+  const i = state.days.findIndex(d => d.date === date);
+  return i < 0 ? 2 : i;
+}
+function calibTargetStd(date) {
+  const base = CALIB.seasonStdF[seasonOf(date)] ?? 3.0;
+  const li = leadIndexOf(date);
+  const mult = CALIB.leadMult[li] ?? CALIB.leadMult[3];
+  return base * mult;
+}
+function stdev(arr) {
+  if (arr.length < 2) return 0;
+  const m = arr.reduce((a,b)=>a+b,0)/arr.length;
+  return Math.sqrt(arr.reduce((a,b)=>a+(b-m)**2,0)/(arr.length-1));
+}
+
+// Monte-Carlo predictive samples: each member max gets a Gaussian kernel. Preserves
+// the member-to-member shape (e.g. bimodal marine-layer days) while applying spread.
+function predictiveSamples(centers, kernelStd, N) {
+  const out = [];
+  const per = Math.ceil(N / centers.length);
+  for (const base of centers) {
+    for (let k = 0; k < per; k++) {
+      const u1 = Math.random() || 1e-9, u2 = Math.random();
+      const z = Math.sqrt(-2*Math.log(u1)) * Math.cos(2*Math.PI*u2);
+      out.push(base + z * kernelStd);
+    }
+  }
+  return out;
+}
+function bucketProbsFromSamples(samples, buckets) {
+  const counts = buckets.map(() => 0);
+  for (const v of samples) {
+    const s = Math.round(v);
+    for (let b = 0; b < buckets.length; b++) {
+      if (s >= buckets[b].lo && s <= buckets[b].hi) { counts[b]++; break; }
+    }
+  }
+  const total = samples.length || 1;
+  return counts.map(c => c / total);
+}
+
+function getDayProjection(date) {
+  const ens = state.ensembleDays[date];
+  const day = state.days.find(d => d.date === date);
+  if (!day) return null;
+
+  let maxes = [], peaks = [];
+  if (ens && ens.members.length) {
+    maxes = ens.members.map(m => m.maxF);
+    peaks = ens.members.map(m => m.peakHour).filter(h => h != null);
+  } else if (day.hourly.length) {
+    // fallback: deterministic + synthetic spread
+    const detPeak = day.hourly.reduce((a,b) => b.temp > a.temp ? b : a, day.hourly[0]);
+    maxes = [day.detMax];
+    peaks = [detPeak.hour];
+  }
+  if (!maxes.length) return null;
+
+  // ---- RAW distribution (what the model says before calibration) ----
+  const rawSorted = [...maxes].sort((a,b)=>a-b);
+  const rawMedian = quantile(rawSorted, 0.5);
+  const rawP10 = quantile(rawSorted, 0.10);
+  const rawP90 = quantile(rawSorted, 0.90);
+  const hasEns = !!(ens && ens.members.length);
+
+  // ---- CALIBRATION: bias shift + spread inflation ----
+  let calMaxes = maxes;
+  let kernelStd = hasEns ? 1.2 : 3.0;
+  let calInfo = null;
+  if (CALIB.enabled) {
+    calMaxes = maxes.map(v => v - CALIB.biasF);               // 1) cool by warm bias
+    const targetStd = calibTargetStd(date);                   // 2) widen to realized error
+    const memberStd = stdev(calMaxes);
+    const k2 = targetStd*targetStd - memberStd*memberStd;     // total var = members + kernel²
+    kernelStd = Math.sqrt(Math.max(k2, CALIB.kernelFloorF*CALIB.kernelFloorF));
+    calInfo = { biasF: CALIB.biasF, targetStd, memberStd, season: seasonOf(date), lead: leadIndexOf(date) };
+  }
+
+  // ---- predictive distribution (shape-preserving) drives median, band, buckets ----
+  const samples = predictiveSamples(calMaxes, kernelStd, 12000);
+  const sSorted = samples.slice().sort((a,b)=>a-b);
+  const median = quantile(sSorted, 0.5);
+  const p10 = quantile(sSorted, 0.10);
+  const p90 = quantile(sSorted, 0.90);
+
+  // peak hour distribution (temperature calibration doesn't change timing)
+  const peakSorted = [...peaks].sort((a,b)=>a-b);
+  const peakMed = peakSorted.length ? quantile(peakSorted, 0.5) : null;
+  const peakLo = peakSorted.length ? quantile(peakSorted, 0.10) : null;
+  const peakHi = peakSorted.length ? quantile(peakSorted, 0.90) : null;
+
+  // buckets centered on the calibrated median, probabilities from the same samples
+  const buckets = generateBuckets(median);
+  const probs = bucketProbsFromSamples(samples, buckets);
+
+  return {
+    median, p10, p90, peakMed, peakLo, peakHi, probs, buckets,
+    nMembers: maxes.length,
+    rawMedian, rawP10, rawP90, calInfo, calibrated: CALIB.enabled,
+  };
+}
+
+function bucketProbsFromMembers(maxes, buckets, kernelStd) {
+  const counts = buckets.map(() => 0);
+  const N = 12000;
+  const per = Math.ceil(N / maxes.length);
+  let total = 0;
+  for (const base of maxes) {
+    for (let k = 0; k < per; k++) {
+      const u1 = Math.random() || 1e-9, u2 = Math.random();
+      const z = Math.sqrt(-2*Math.log(u1)) * Math.cos(2*Math.PI*u2);
+      const s = Math.round(base + z * kernelStd);
+      for (let b = 0; b < buckets.length; b++) {
+        if (s >= buckets[b].lo && s <= buckets[b].hi) { counts[b]++; break; }
+      }
+      total++;
+    }
+  }
+  return counts.map(c => c / total);
+}
+
+// =============================================================================
+// Render
+// =============================================================================
+function makeStat({label, value, unit, sub, tone}) {
+  return `<div class="stat"><label>${label}</label>
+    <div><span class="v${tone?" "+tone:""}">${value}</span>${unit?`<span class="u">${unit}</span>`:""}</div>
+    ${sub?`<div class="sub">${sub}</div>`:""}</div>`;
+}
+
+// =============================================================================
+// Plain-English daily weather summary
+// Built from that day's hourly cloud / wind / precip forecast. Daytime window
+// (7a–7p) drives the high, so the sky/wind read is weighted there.
+// =============================================================================
+function compass(deg) {
+  if (deg == null || isNaN(deg)) return null;
+  const dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+  return dirs[Math.round(deg / 22.5) % 16];
+}
+
+function describeDay(day, proj) {
+  if (!day || !day.hourly || !day.hourly.length) return null;
+  const mean = arr => arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : null;
+  const daty = day.hourly.filter(h => h.hour >= 7 && h.hour <= 19);
+  const src = daty.length ? daty : day.hourly;
+
+  const clouds  = src.map(h => h.cloud).filter(v => v != null);
+  const amCloud = mean(src.filter(h => h.hour >= 7 && h.hour <= 12).map(h=>h.cloud).filter(v=>v!=null));
+  const pmCloud = mean(src.filter(h => h.hour >= 13 && h.hour <= 19).map(h=>h.cloud).filter(v=>v!=null));
+  const meanCloud = mean(clouds);
+
+  const meanWind = mean(src.map(h => h.wind).filter(v => v != null));
+  let wx=0, wy=0, nd=0;
+  src.forEach(h => { if (h.windDir!=null){ const r=h.windDir*Math.PI/180; wx+=Math.cos(r); wy+=Math.sin(r); nd++; }});
+  let domDir = null;
+  if (nd) { let deg = Math.atan2(wy,wx)*180/Math.PI; if (deg<0) deg+=360; domDir = compass(deg); }
+
+  const precips = src.map(h => h.precip).filter(v => v != null);
+  const maxPrecip = precips.length ? Math.max(...precips) : null;
+
+  // sky phrase
+  const clearing = amCloud != null && pmCloud != null && amCloud - pmCloud >= 25 && amCloud >= 55;
+  const clouding = amCloud != null && pmCloud != null && pmCloud - amCloud >= 25 && pmCloud >= 55;
+  let sky;
+  if (clearing)              sky = "morning clouds giving way to afternoon sun";
+  else if (clouding)         sky = "sun early, clouding up by afternoon";
+  else if (meanCloud == null) sky = "mixed skies";
+  else if (meanCloud < 20)   sky = "mostly sunny";
+  else if (meanCloud < 45)   sky = "partly sunny";
+  else if (meanCloud < 70)   sky = "more clouds than sun";
+  else if (meanCloud < 88)   sky = "mostly cloudy";
+  else                       sky = "overcast and gray";
+
+  // wind phrase
+  let windPhrase = "";
+  if (meanWind != null) {
+    const marine   = domDir && ["S","SSW","SW","WSW","W"].includes(domDir);
+    const offshore = domDir && ["N","NNE","NE","ENE","E"].includes(domDir);
+    if (meanWind < 4) {
+      windPhrase = "winds light";
+    } else {
+      const strength = meanWind < 12 ? "moderate" : "brisk";
+      windPhrase = `${strength} ${domDir || ""} wind`.replace(/\s+/g," ").trim();
+      if (marine && meanWind >= 6) windPhrase += " (onshore/marine)";
+      else if (offshore && meanWind >= 6) windPhrase += " (offshore)";
+    }
+  }
+
+  // precip phrase
+  let precipPhrase = "";
+  if (maxPrecip != null) {
+    if (maxPrecip >= 60)      precipPhrase = "showers likely";
+    else if (maxPrecip >= 35) precipPhrase = "a chance of showers";
+    else if (maxPrecip >= 20) precipPhrase = "slight shower chance";
+  }
+
+  // temp phrase
+  const hi = proj ? Math.round(proj.median) : (day.detMax != null ? Math.round(day.detMax) : null);
+
+  // assemble sentence
+  const parts = [sky.charAt(0).toUpperCase() + sky.slice(1)];
+  if (precipPhrase) parts.push(precipPhrase);
+  if (windPhrase)   parts.push(windPhrase);
+  let sentence = parts.join(", ");
+  sentence += hi != null ? `. High near ${hi}°.` : ".";
+
+  // one-word tag for the day chip
+  let tag;
+  if (precipPhrase)            tag = "showers";
+  else if (clearing)           tag = "clearing";
+  else if (meanCloud == null)  tag = "mixed";
+  else if (meanCloud < 20)     tag = "sunny";
+  else if (meanCloud < 45)     tag = "partly";
+  else if (meanCloud < 70)     tag = "clouds";
+  else                         tag = "cloudy";
+
+  return { sentence, tag };
+}
+
+function tagIcon(tag) {
+  switch (tag) {
+    case "sunny":    return "☀️";
+    case "clearing": return "🌤️";
+    case "partly":   return "⛅";
+    case "clouds":   return "🌥️";
+    case "cloudy":   return "☁️";
+    case "showers":  return "🌧️";
+    case "mixed":    return "🌥️";
+    default:         return "🌡️";
+  }
+}
+function renderDayStrip() {
+  const el = document.getElementById("day-strip");
+  el.innerHTML = state.days.map(d => {
+    const proj = getDayProjection(d.date);
+    const hi = proj ? Math.round(proj.median) : Math.round(d.detMax);
+    const range = proj ? `${Math.round(proj.p10)}–${Math.round(proj.p90)}` : "";
+    const desc = describeDay(d, proj);
+    const tag = desc ? desc.tag : "";
+    const icon = tagIcon(tag);
+    const active = d.date === state.selectedDate ? " active" : "";
+    return `<div class="day-chip${active}" data-date="${d.date}">
+      <div class="dname">${d.label}</div>
+      <div class="dicon">${icon}</div>
+      <div class="dhi">${hi}°</div>
+      <div class="dsub">${range}</div>
+      <div class="dtag">${tag}</div>
+    </div>`;
+  }).join("");
+  el.querySelectorAll(".day-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      state.selectedDate = chip.dataset.date;
+      renderAll();
+    });
+  });
+}
+
+function renderProjection() {
+  const proj = getDayProjection(state.selectedDate);
+  const day = state.days.find(d => d.date === state.selectedDate);
+  const titleEl = document.getElementById("sel-day-title");
+  const confEl = document.getElementById("sel-day-conf");
+  const statsEl = document.getElementById("proj-stats");
+  const boundaryEl = document.getElementById("boundary-bar");
+  if (!proj || !day) {
+    statsEl.innerHTML = `<div style="color:#94a2b4">no data</div>`;
+    if (boundaryEl) boundaryEl.innerHTML = "";
+    return;
+  }
+
+  titleEl.textContent = `${day.label === "Today" ? "Today" : day.label} · ${day.date.slice(5)} Projection`;
+  confEl.textContent = `${proj.nMembers} members`;
+
+  const summaryEl = document.getElementById("day-summary");
+  if (summaryEl) {
+    const desc = describeDay(day, proj);
+    summaryEl.textContent = desc ? desc.sentence : "—";
+  }
+
+  const peakTxt = proj.peakMed != null
+    ? `${fmtHour(proj.peakLo)}–${fmtHour(proj.peakHi)}`
+    : "—";
+  const peakBest = proj.peakMed != null ? fmtHour(proj.peakMed) : "—";
+
+  // Bucket + boundary math
+  const median = proj.median;
+  const rounded = Math.round(median);
+  const bucketLo = rounded % 2 === 1 ? rounded : rounded - 1;
+  const bucketHi = bucketLo + 1;
+  const boundaryLo = bucketLo - 0.5;   // below this rounds to a lower bucket
+  const boundaryHi = bucketHi + 0.5;   // above this rounds to a higher bucket
+  const distLo = median - boundaryLo;
+  const distHi = boundaryHi - median;
+  const closer = Math.min(distLo, distHi);
+  const closerDir = distLo < distHi ? "below" : "above";
+  const closerBucket = distLo < distHi
+    ? `${bucketLo-2}–${bucketLo-1}`
+    : `${bucketHi+1}–${bucketHi+2}`;
+
+  statsEl.innerHTML = [
+    makeStat({ label: "Proj. high", value: median.toFixed(2), unit: "°F",
+      sub: `rounds to ${rounded}° · bucket ${bucketLo}–${bucketHi}`, tone: "accent" }),
+    makeStat({ label: "80% range", value: `${proj.p10.toFixed(1)}–${proj.p90.toFixed(1)}`, unit: "°F",
+      sub: "10th–90th pct" }),
+    makeStat({ label: "Time of high", value: peakBest,
+      sub: `range ${peakTxt}`, tone: "muted" }),
+  ].join("");
+
+  // Calibration note: show raw → calibrated and what was applied
+  const calibNoteEl = document.getElementById("calib-note");
+  if (calibNoteEl) {
+    if (proj.calibrated && proj.calInfo) {
+      const ci = proj.calInfo;
+      const leadTxt = ci.lead === 0 ? "today" : ci.lead === 1 ? "tomorrow" : `+${ci.lead}d`;
+      calibNoteEl.innerHTML = `<span style="color:#9ca3af">calibrated</span> · raw ${proj.rawMedian.toFixed(1)}° → <b>${median.toFixed(1)}°</b> (−${ci.biasF.toFixed(1)} bias) · spread ±${(ci.targetStd*1.2816).toFixed(1)}° (${ci.season}, ${leadTxt})`;
+    } else {
+      calibNoteEl.innerHTML = `<span style="color:#9ca3af">calibration off</span> · showing raw model output`;
+    }
+  }
+
+  // Current temp vs. projection ticker (Today only)
+  const currentTickerEl = document.getElementById("current-ticker");
+  const isToday = state.days.length && day.date === state.days[0].date;
+  if (currentTickerEl) {
+    if (isToday && state.current && state.current.tempF != null) {
+      const currentF = state.current.tempF;
+      const gap = median - currentF;
+
+      // Figure out current local hour in Pacific time, then collect today's
+      // hourly temps from start-of-day through "now" to get low and high-so-far
+      let pacificHour;
+      try {
+        pacificHour = parseInt(new Date().toLocaleString("en-US",
+          { timeZone: TZ, hour12: false, hour: "numeric" }), 10);
+      } catch (e) { pacificHour = new Date().getHours(); }
+      const pastTemps = (day.hourly || [])
+        .filter(h => h.hour <= pacificHour)
+        .map(h => h.temp);
+
+      // Prefer REAL observation history for high-so-far if available
+      let highSoFar, todayLow;
+      if (state.obsHistory && state.obsHistory.length > 0) {
+        const todayLocalDate = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+        const todayObs = state.obsHistory.filter(r => {
+          const obsDate = r.time.toLocaleDateString("en-CA", { timeZone: TZ });
+          return obsDate === todayLocalDate;
+        });
+        if (todayObs.length > 0) {
+          const obsTemps = todayObs.map(r => r.tempF);
+          highSoFar = Math.max(...obsTemps, currentF);
+          // Low: prefer obs if we have early-morning coverage, else model min
+          todayLow = obsTemps.length >= 6
+            ? Math.min(...obsTemps, currentF)
+            : (day.detMin != null ? day.detMin : Math.min(...obsTemps, currentF));
+        }
+      }
+      if (highSoFar == null) {
+        // Fall back to hourly forecast
+        todayLow = pastTemps.length
+          ? Math.min(...pastTemps, currentF)
+          : (day.detMin != null ? day.detMin : currentF);
+        highSoFar = pastTemps.length
+          ? Math.max(...pastTemps, currentF)
+          : currentF;
+      }
+
+      const hsr = settleRead(highSoFar);
+
+      // Position current on a bar from today's low up to projected high
+      const range = median - todayLow;
+      const pct = range > 0
+        ? Math.max(0, Math.min(100, (currentF - todayLow) / range * 100))
+        : 50;
+
+      let gapTxt, gapColor, gapArrow;
+      if (Math.abs(gap) < 0.3) {
+        gapTxt = "at projection"; gapColor = "#34d399"; gapArrow = "●";
+      } else if (gap > 0) {
+        gapTxt = `${gap.toFixed(2)}°F to go`; gapColor = "#fbbf24"; gapArrow = "↑";
+      } else {
+        gapTxt = `${Math.abs(gap).toFixed(2)}°F above proj`;
+        gapColor = "#f87171"; gapArrow = "↑↑";
+      }
+
+      currentTickerEl.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+          <div style="font-size:9px;letter-spacing:0.2em;color:#9fb0c4;text-transform:uppercase">
+            Current vs. projection
+          </div>
+          <div style="font-size:9px;color:#9ca3af;font-variant-numeric:tabular-nums">
+            ${state.current.source ? state.current.source : "model grid"}${
+              state.current.time ? " · " + (function(){
+                const ageMin = Math.round((Date.now() - new Date(state.current.time).getTime()) / 60000);
+                return ageMin < 1 ? "just now" : ageMin + "m ago";
+              })() : ""
+            }
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+          <div>
+            <span style="font-size:22px;font-variant-numeric:tabular-nums;color:#fcd34d;font-weight:600">${currentF.toFixed(2)}</span>
+            <span style="font-size:11px;color:#9fb0c4;margin-left:3px">°F now</span>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:14px;color:${gapColor};font-variant-numeric:tabular-nums;font-weight:600">${gapArrow} ${gapTxt}</div>
+            <div style="font-size:9px;color:#94a2b4;margin-top:2px">high so far: <b style="color:#fcd34d">${hsr.ambiguous ? hsr.range : hsr.settles}°</b> <span style="color:#7e8ea4">(${highSoFar.toFixed(1)}°F${hsr.isArtifact ? " = " + hsr.nC + "°C" : " raw"})</span></div>
+          </div>
+        </div>
+        <div style="position:relative;height:8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.10);border-radius:3px;overflow:hidden">
+          <div style="position:absolute;left:0;top:0;bottom:0;width:${pct.toFixed(1)}%;background:linear-gradient(to right, #fbbf24, #fcd34d)"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:#94a2b4;margin-top:4px;font-variant-numeric:tabular-nums">
+          <span>${todayLow.toFixed(1)}°F low</span>
+          <span>${median.toFixed(2)}°F proj high</span>
+        </div>
+        ${hsr.ambiguous
+          ? `<div style="margin-top:8px;padding:7px 9px;background:rgba(248,113,113,0.10);border-left:2px solid #f87171;border-radius:4px;font-size:9px;line-height:1.5;color:#fca5a5">⚠ Whole-°C reading: this is <b>${hsr.nC}°C</b>, not a precise temp. The official CLI rounds the hidden <i>tenths</i>, which settle <b>${hsr.range}°</b> — can't tell which from this feed. The naive round (${hsr.settles}°) is just one end. Cross-check the NWS 6-hour ob or CLISEA for the real number.</div>`
+          : hsr.gap
+            ? `<div style="margin-top:8px;padding:7px 9px;background:rgba(248,113,113,0.10);border-left:2px solid #f87171;border-radius:4px;font-size:9px;line-height:1.45;color:#fca5a5">⚠ Rounding gap: whole-°C feeds (and the obs text list) read <b>${hsr.wholeCF}°</b>, but the precise reading settles <b>${hsr.settles}°</b> on the official CLI — trust ${hsr.settles}°.</div>`
+            : ""}
+      `;
+    } else {
+      currentTickerEl.innerHTML = "";
+    }
+  }
+
+  // Boundary indicator bar
+  if (boundaryEl) {
+    const pct = Math.max(0, Math.min(100, (median - boundaryLo) / 2 * 100));
+    let label, color;
+    if (closer < 0.25)      { label = "VERY close to flip"; color = "#f87171"; }
+    else if (closer < 0.50) { label = "close to flip";      color = "#fbbf24"; }
+    else if (closer < 1.00) { label = "moderate margin";    color = "#fbbf24"; }
+    else                    { label = "comfortable";        color = "#34d399"; }
+
+    boundaryEl.innerHTML = `
+      <div style="font-size:9px;letter-spacing:0.2em;color:#9fb0c4;text-transform:uppercase;margin-bottom:8px">
+        Rounding boundary distance
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a2b4;margin-bottom:4px;font-variant-numeric:tabular-nums">
+        <span>${boundaryLo.toFixed(1)}°F</span>
+        <span style="color:${color}">${closer.toFixed(2)}°F ${closerDir} · ${label}</span>
+        <span>${boundaryHi.toFixed(1)}°F</span>
+      </div>
+      <div style="position:relative;height:22px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.10);border-radius:3px;overflow:visible;margin-bottom:18px">
+        <div style="position:absolute;left:0;right:0;top:50%;height:1px;background:rgba(255,255,255,0.06);transform:translateY(-50%)"></div>
+        <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.10)"></div>
+        <div style="position:absolute;left:${pct}%;top:-3px;bottom:-3px;width:3px;background:${color};border-radius:1px;box-shadow:0 1px 3px rgba(0,0,0,0.2)"></div>
+        <div style="position:absolute;left:${pct}%;top:26px;font-size:10px;color:${color};transform:translateX(-50%);font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:600">
+          ${median.toFixed(2)}°F
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:#9fb0c4;margin-top:6px">
+        <span style="color:#9ca3af">← ${bucketLo-2}–${bucketLo-1}</span>
+        <span style="color:#aab6c6;font-weight:500">${bucketLo}–${bucketHi} (current)</span>
+        <span style="color:#9ca3af">${bucketHi+1}–${bucketHi+2} →</span>
+      </div>
+    `;
+  }
+}
+
+function renderBuckets() {
+  const proj = getDayProjection(state.selectedDate);
+  const barsEl = document.getElementById("bucket-bars");
+  const srcEl = document.getElementById("prob-src");
+  const noteEl = document.getElementById("prob-note");
+  if (!proj) { barsEl.innerHTML = ""; return; }
+
+  srcEl.textContent = state.nMembers ? "ensemble" : "deterministic";
+  const buckets = proj.buckets;
+  const maxP = Math.max(...proj.probs);
+  barsEl.innerHTML = buckets.map((b, i) => {
+    const p = proj.probs[i];
+    const most = p === maxP;
+    return `<div class="bucket-row">
+      <div class="bucket-label${most?" most":""}">${b.label}</div>
+      <div class="bar-track"><div class="bar-fill${most?" most":""}" style="width:${(p*100).toFixed(2)}%"></div></div>
+      <div class="bucket-pct${most?" most":""}">${(p*100).toFixed(1)}%</div>
+    </div>`;
+  }).join("");
+  noteEl.textContent = state.nMembers
+    ? (proj.calibrated && proj.calInfo
+        ? `Buckets centered on ${Math.round(proj.median)}°F · ${proj.nMembers} GFS members, bias-corrected and spread-calibrated to realized error (±${(proj.calInfo.targetStd*1.2816).toFixed(1)}°F).`
+        : `Buckets auto-centered on ${Math.round(proj.median)}°F · from ${proj.nMembers} GFS members (raw, uncalibrated).`)
+    : `Ensemble unavailable — deterministic forecast + synthetic spread.`;
+}
+
+function renderChart() {
+  const wrap = document.getElementById("chart");
+  const day = state.days.find(d => d.date === state.selectedDate);
+  const ens = state.ensembleDays[state.selectedDate];
+  if (!day || !day.hourly.length) { wrap.innerHTML = `<div style="color:#9fb0c4;padding:30px 0;text-align:center">no data</div>`; return; }
+
+  const W = wrap.clientWidth || 640, H = 190;
+  const padL = 34, padR = 14, padT = 12, padB = 22;
+
+  // Build median + band per hour from ensemble; else deterministic line
+  const hours = day.hourly.map(h => h.hour);
+  let medLine = [], loBand = [], hiBand = [];
+  if (ens && ens.members.length) {
+    for (let hr = 0; hr <= 23; hr++) {
+      const vals = [];
+      for (const m of ens.members) {
+        const pt = m.curve.find(c => c.hour === hr);
+        if (pt) vals.push(pt.temp);
+      }
+      if (vals.length) {
+        vals.sort((a,b)=>a-b);
+        medLine.push({ hour: hr, v: quantile(vals,0.5) });
+        loBand.push({ hour: hr, v: quantile(vals,0.10) });
+        hiBand.push({ hour: hr, v: quantile(vals,0.90) });
+      }
+    }
+  } else {
+    medLine = day.hourly.map(h => ({ hour: h.hour, v: h.temp }));
+  }
+
+  const allV = medLine.map(p=>p.v).concat(loBand.map(p=>p.v)).concat(hiBand.map(p=>p.v));
+  let vMin = Math.floor(Math.min(...allV) - 2), vMax = Math.ceil(Math.max(...allV) + 2);
+  if (vMax - vMin < 10) vMax = vMin + 10;
+  const xS = h => padL + (h/23)*(W-padL-padR);
+  const yS = v => H - padB - (v-vMin)/(vMax-vMin)*(H-padT-padB);
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`;
+  svg += `<defs><linearGradient id="tgrad" x1="0" y1="0" x2="0" y2="1">`
+       + `<stop offset="0%" stop-color="#fcd34d" stop-opacity="0.42"/>`
+       + `<stop offset="55%" stop-color="#f59e0b" stop-opacity="0.15"/>`
+       + `<stop offset="100%" stop-color="#f59e0b" stop-opacity="0.01"/></linearGradient></defs>`;
+
+  // cloud cover bars (background)
+  for (const h of day.hourly) {
+    const x = xS(h.hour), w = (W-padL-padR)/24;
+    const ch = (h.cloud/100) * (H-padT-padB);
+    svg += `<rect x="${x-w/2}" y="${H-padB-ch}" width="${w*0.8}" height="${ch}" fill="#60a5fa" opacity="0.10"/>`;
+  }
+
+  // y grid
+  const yStep = Math.ceil((vMax-vMin)/5);
+  for (let v=vMin; v<=vMax; v+=yStep) {
+    const y=yS(v);
+    svg += `<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="rgba(255,255,255,0.08)"/>`;
+    svg += `<text x="${padL-5}" y="${y+3}" fill="#8ba0bd" font-size="9" font-family="-apple-system,system-ui,sans-serif" text-anchor="end">${v}</text>`;
+  }
+  for (const t of [0,6,12,18]) {
+    svg += `<text x="${xS(t)}" y="${H-6}" fill="#8ba0bd" font-size="9" font-family="-apple-system,system-ui,sans-serif" text-anchor="middle">${String(t).padStart(2,"0")}</text>`;
+  }
+
+  // 10–90% band (soft amber)
+  if (loBand.length && hiBand.length) {
+    const top = hiBand.map((p,i)=>`${i===0?"M":"L"}${xS(p.hour).toFixed(1)},${yS(p.v).toFixed(1)}`).join(" ");
+    const bot = [...loBand].reverse().map(p=>`L${xS(p.hour).toFixed(1)},${yS(p.v).toFixed(1)}`).join(" ");
+    svg += `<path d="${top} ${bot} Z" fill="#fbbf24" opacity="0.13"/>`;
+  }
+  // gradient area + median line (MSN-style hill)
+  if (medLine.length) {
+    const base = (H - padB).toFixed(1);
+    const line = medLine.map((p,i)=>`${i===0?"M":"L"}${xS(p.hour).toFixed(1)},${yS(p.v).toFixed(1)}`).join(" ");
+    const x0 = xS(medLine[0].hour).toFixed(1);
+    const xN = xS(medLine[medLine.length-1].hour).toFixed(1);
+    svg += `<path d="${line} L${xN},${base} L${x0},${base} Z" fill="url(#tgrad)"/>`;
+    svg += `<path d="${line}" stroke="#fcd34d" stroke-width="2.2" fill="none" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }
+  // projected high reference
+  const proj = getDayProjection(state.selectedDate);
+  if (proj) {
+    const y = yS(proj.median);
+    svg += `<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="#fcd34d" stroke-dasharray="2,4" opacity="0.6"/>`;
+  }
+  svg += `</svg>`;
+  wrap.innerHTML = svg;
+}
+
+function renderCurrent() {
+  const panel = document.getElementById("current-panel");
+  const el = document.getElementById("current-state");
+  const timeEl = document.getElementById("cur-time");
+  // Only show current conditions when "Today" is selected
+  const isToday = state.days.length && state.selectedDate === state.days[0].date;
+  panel.style.display = isToday ? "" : "none";
+  if (!isToday || !state.current) return;
+  const c = state.current;
+  timeEl.textContent = c.time ? c.time.split("T")[1] : "";
+  el.innerHTML = [
+    makeStat({ label: "Temp", value: c.tempF != null ? c.tempF.toFixed(1) : "—", unit: "°F", tone: "hero" }),
+    makeStat({ label: "Dewpoint", value: c.dewF != null ? c.dewF.toFixed(1) : "—", unit: "°F",
+      sub: (c.dewF!=null&&c.tempF!=null)?`spread ${(c.tempF-c.dewF).toFixed(1)}°F`:"" }),
+    makeStat({ label: "Cloud", value: c.cloud != null ? c.cloud : "—", unit: "%",
+      sub: `wind ${c.windMph!=null?c.windMph.toFixed(0):"—"} mph` }),
+  ].join("");
+}
+
+function renderStatus() {
+  const dot = document.getElementById("status-dot");
+  const label = document.getElementById("status-label");
+  const fetchAge = document.getElementById("fetch-age");
+  const mem = document.getElementById("members-info");
+  const errEl = document.getElementById("error");
+  if (state.error) { dot.className="dot err"; label.textContent="feed err"; }
+  else if (state.loading) { dot.className="dot load"; label.textContent="loading"; }
+  else { dot.className="dot live"; label.textContent="live"; }
+  if (state.lastFetch) fetchAge.textContent = `fetched ${Math.floor((Date.now()-state.lastFetch)/1000)}s ago`;
+  mem.textContent = state.nMembers ? `${state.nMembers} ens members` : "deterministic only";
+  if (state.error) { errEl.style.display="block"; errEl.className="err-box"; errEl.textContent=`! ${state.error}`; }
+  else errEl.style.display="none";
+}
+
+// =============================================================================
+// Live conditions summary + hit probability
+// =============================================================================
+function cloudDescription(pct) {
+  if (pct == null) return "skies unknown";
+  if (pct < 12) return "clear skies";
+  if (pct < 30) return "mostly clear";
+  if (pct < 55) return "partly cloudy";
+  if (pct < 80) return "mostly cloudy";
+  return "overcast";
+}
+function windDescription(mph, dir) {
+  if (mph == null) return "wind unknown";
+  if (mph < 3) return "calm wind";
+  const dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+  const dirStr = dir != null ? dirs[Math.round(((dir%360)/22.5))%16] : "";
+  if (mph < 8)  return `light ${dirStr} wind ${mph.toFixed(0)} mph`;
+  if (mph < 16) return `moderate ${dirStr} wind ${mph.toFixed(0)} mph`;
+  return `strong ${dirStr} wind ${mph.toFixed(0)} mph`;
+}
+
+// Time-aware probability of hitting today's projected high.
+// Combines: ensemble prob @ projected bucket, current temp's progress relative
+// to projection, and how much of the heating window is left.
+function computeHitProbability() {
+  const proj = getDayProjection(state.selectedDate);
+  const day  = state.days.find(d => d.date === state.selectedDate);
+  if (!proj || !day || !state.current || state.current.tempF == null) return null;
+  const isToday = state.days.length && day.date === state.days[0].date;
+  if (!isToday) return null;
+
+  const projHigh = proj.median;
+  const cur = state.current.tempF;
+
+  // Heating-window position: pacific local hour now
+  let pacHour;
+  try {
+    pacHour = parseFloat(new Date().toLocaleString("en-US",
+      { timeZone: TZ, hour12: false, hour: "numeric", minute: "numeric" }).replace(/[^\d.:]/g,"").replace(":", "."));
+  } catch (e) { pacHour = new Date().getHours(); }
+
+  const peakHour = proj.peakMed != null ? proj.peakMed : 15.5;
+  // Heating window: ~6am to peakHour. Used to estimate "how much chance remains".
+  const heatStart = 6;
+  const winLen = Math.max(1, peakHour - heatStart);
+
+  // Get high-so-far from real obs if available
+  let highSoFar = cur;
+  if (state.obsHistory && state.obsHistory.length > 0) {
+    const todayLocalDate = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+    const todayObs = state.obsHistory.filter(r => {
+      const obsDate = r.time.toLocaleDateString("en-CA", { timeZone: TZ });
+      return obsDate === todayLocalDate;
+    });
+    if (todayObs.length > 0) highSoFar = Math.max(...todayObs.map(r => r.tempF), cur);
+  }
+
+  // Already hit it? Done — 100%.
+  if (highSoFar >= projHigh - 0.05) {
+    return { pct: 100, label: "ALREADY HIT", color: "#34d399",
+             reason: `high so far ${highSoFar.toFixed(1)}°F already at or above projection` };
+  }
+
+  // Past peak window without hitting? Decay fast.
+  if (pacHour > peakHour + 1.5) {
+    // 1.5h past projected peak and didn't reach — very unlikely
+    const gap = projHigh - highSoFar;
+    const lateProb = Math.max(2, 18 - gap * 8);
+    return { pct: lateProb, label: lateProb < 10 ? "VERY UNLIKELY" : "UNLIKELY", color: "#f87171",
+             reason: `${(pacHour - peakHour).toFixed(1)}h past projected peak, still ${gap.toFixed(1)}°F short` };
+  }
+
+  // In the heating window: combine multiple signals
+  // 1) Ensemble baseline: members landing at-or-above projection's rounded value
+  let baseProb = 50; // default if no ensemble
+  if (state.nMembers > 0 && day.members && day.members.length) {
+    const target = projHigh - 0.5; // count anyone within 0.5° of projection
+    const hits = day.members.filter(m => m.max >= target).length;
+    baseProb = 100 * hits / day.members.length;
+  }
+
+  // 2) Climb-pace adjustment: where is current relative to where it "should" be
+  // at this point in the heating window?
+  const winFracElapsed = Math.max(0, Math.min(1, (pacHour - heatStart) / winLen));
+  const todayLow = day.detMin != null ? day.detMin : (cur - 10);
+  const expectedNow = todayLow + (projHigh - todayLow) * Math.sin(winFracElapsed * Math.PI / 2);
+  const paceGap = cur - expectedNow;  // + means ahead of pace, - means behind
+  const paceBoost = Math.max(-25, Math.min(25, paceGap * 6));
+
+  // 3) Time-decay weight: as the window closes, climb-pace matters more, ensemble matters less
+  const blend = winFracElapsed; // 0 early -> 1 at peak
+  const combined = baseProb * (1 - blend * 0.5) + (50 + paceBoost) * (blend * 0.5);
+  const pct = Math.max(2, Math.min(98, combined));
+
+  let label, color;
+  if (pct >= 70)      { label = "LIKELY";   color = "#34d399"; }
+  else if (pct >= 45) { label = "PLAUSIBLE"; color = "#f59e0b"; }
+  else if (pct >= 25) { label = "TOUGH";     color = "#f59e0b"; }
+  else                { label = "UNLIKELY";  color = "#f87171"; }
+
+  const gap = projHigh - cur;
+  const paceWord = paceGap > 0.5 ? "ahead of pace" : paceGap < -0.5 ? "behind pace" : "on pace";
+  return { pct, label, color,
+           reason: `currently ${cur.toFixed(1)}°F, ${gap.toFixed(1)}°F to reach projection · ${paceWord} for the heating window` };
+}
+
+function renderConditions() {
+  const panel = document.getElementById("conditions-panel");
+  const isToday = state.days.length && state.selectedDate === state.days[0].date;
+  panel.style.display = isToday ? "" : "none";
+  if (!isToday) return;
+
+  const c = state.current;
+  const summaryEl = document.getElementById("conditions-summary");
+  const gridEl    = document.getElementById("conditions-grid");
+  const srcEl     = document.getElementById("conditions-src");
+  const hitEl     = document.getElementById("hit-probability");
+
+  if (!c) {
+    summaryEl.textContent = "Live conditions unavailable.";
+    gridEl.innerHTML = "";
+    srcEl.textContent = "";
+    hitEl.innerHTML = "";
+    return;
+  }
+
+  // Compute RH locally from temp & dew (METAR doesn't carry RH directly)
+  const tempC = c.tempF != null ? (c.tempF - 32) * 5/9 : null;
+  const dewC  = c.dewF  != null ? (c.dewF  - 32) * 5/9 : null;
+  const rh    = computeRH(tempC, dewC);
+
+  srcEl.textContent = c.source ? c.source : "";
+
+  // Plain-English summary
+  const cloud = cloudDescription(c.cloud);
+  const wind  = windDescription(c.windMph, c.windDir);
+  const tempPart = c.tempF != null ? `Currently <b style="color:#fcd34d">${c.tempF.toFixed(1)}°F</b>` : "Temp unknown";
+  const dewPart  = c.dewF  != null ? `dew ${c.dewF.toFixed(0)}°` : "";
+  const rhPart   = rh != null ? `RH ${rh.toFixed(0)}%` : "";
+  summaryEl.innerHTML = `${tempPart}, ${[dewPart, rhPart].filter(Boolean).join(", ")}, ${wind}, ${cloud}.`;
+
+  // Grid of detail stats
+  gridEl.innerHTML = [
+    makeStat({ label: "Temp",     value: c.tempF != null ? c.tempF.toFixed(1) : "—", unit: "°F", tone: "accent" }),
+    makeStat({ label: "Dew point",value: c.dewF  != null ? c.dewF.toFixed(1)  : "—", unit: "°F",
+      sub: (c.dewF!=null&&c.tempF!=null)?`spread ${(c.tempF-c.dewF).toFixed(1)}°F`:"" }),
+    makeStat({ label: "Humidity", value: rh != null ? rh.toFixed(0) : "—", unit: "%",
+      sub: c.cloud!=null?`cloud ${c.cloud}%`:"" }),
+  ].join("");
+
+  // Hit probability
+  const hit = computeHitProbability();
+  if (!hit) {
+    hitEl.innerHTML = `<div style="font-size:9px;letter-spacing:0.2em;color:#9fb0c4;text-transform:uppercase;margin-bottom:6px">Chance of hitting projected high</div>
+      <div style="color:#9ca3af;font-size:12px">Need live data + projection to compute.</div>`;
+    return;
+  }
+
+  hitEl.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+      <div style="font-size:9px;letter-spacing:0.2em;color:#9fb0c4;text-transform:uppercase">Chance of hitting projected high</div>
+      <div style="font-size:9px;color:#9ca3af">updates each refresh</div>
+    </div>
+    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
+      <span style="font-size:30px;font-variant-numeric:tabular-nums;color:${hit.color};font-weight:600">${hit.pct.toFixed(0)}<span style="font-size:14px">%</span></span>
+      <span style="font-size:11px;color:${hit.color};letter-spacing:0.1em;font-weight:600">${hit.label}</span>
+    </div>
+    <div style="position:relative;height:6px;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden;margin-bottom:6px">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:${hit.pct.toFixed(0)}%;background:${hit.color};transition:width 0.6s ease"></div>
+    </div>
+    <div style="font-size:10px;color:#94a2b4;line-height:1.4">${hit.reason}</div>
+  `;
+}
+
+// =============================================================================
+// Alerts panel - collapsible summary
+// =============================================================================
+function toggleAlertsExpand() {
+  const exp = document.getElementById("alerts-expanded");
+  const arr = document.getElementById("alerts-expand-arrow");
+  const collapsedRow = document.getElementById("alerts-collapsed-row");
+  if (exp.style.display === "none") {
+    exp.style.display = "";
+    arr.textContent = "▾";
+    collapsedRow.style.display = "none";
+  } else {
+    exp.style.display = "none";
+    arr.textContent = "▸";
+    collapsedRow.style.display = "";
+  }
+}
+
+function renderAlertsSummary() {
+  const tEl = document.getElementById("alerts-summary-t");
+  const dEl = document.getElementById("alerts-summary-d");
+  const rEl = document.getElementById("alerts-summary-r");
+  if (!tEl) return;
+  const t = getThresholds();
+  tEl.textContent = isFinite(t.temp) ? t.temp.toFixed(1) : "—";
+  dEl.textContent = isFinite(t.dew)  ? t.dew.toFixed(1)  : "—";
+  rEl.textContent = isFinite(t.rh)   ? t.rh.toFixed(0)   : "—";
+  // Mirror last-trigger to compact row
+  const lastEl = document.getElementById("alert-last");
+  const compactEl = document.getElementById("alert-last-compact");
+  if (lastEl && compactEl) compactEl.textContent = lastEl.textContent;
+}
+
+// =============================================================================
+// AI Daily Call — a single committed prediction per date, computed once from the
+// calibrated ensemble projection and FROZEN in localStorage so it never drifts
+// on refresh. Includes a plain-English rationale of the factors behind it.
+// =============================================================================
+const AI_CALL_KEY = "ksea_ai_call_v1";
+function loadAICalls() { try { return JSON.parse(localStorage.getItem(AI_CALL_KEY) || "{}"); } catch (e) { return {}; } }
+function saveAICalls(o) { try { localStorage.setItem(AI_CALL_KEY, JSON.stringify(o)); } catch (e) {} }
+
+const AI_LOCK_HOUR_PT = 10; // call freezes at the first refresh at/after 10:00 America/Los_Angeles
+function pacificNowParts() {
+  try {
+    const parts = {};
+    new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles",
+      year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false })
+      .formatToParts(new Date()).forEach(p => parts[p.type] = p.value);
+    return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: parseInt(parts.hour, 10) % 24 };
+  } catch (e) {
+    const d = new Date();
+    return { date: d.toISOString().slice(0, 10), hour: d.getHours() };
+  }
+}
+function computeAICall(date) {
+  const proj = getDayProjection(date);
+  const day = state.days.find(d => d.date === date);
+  if (!proj || !day || proj.median == null) return { valid: false };
+
+  // most-likely 2° bin = argmax of the bucket probabilities
+  let topIdx = 0;
+  for (let i = 1; i < proj.probs.length; i++) if (proj.probs[i] > proj.probs[topIdx]) topIdx = i;
+  const topB = proj.buckets[topIdx];
+  const topProb = proj.probs[topIdx];
+  const predHigh = Math.round(proj.median);
+  const band = proj.p90 - proj.p10;
+  const conf = topProb >= 0.45 ? "High" : topProb >= 0.30 ? "Moderate" : "Low";
+  const peakBest = proj.peakMed != null ? fmtHour(proj.peakMed) : null;
+  const desc = describeDay(day, proj);
+  const cleanBin = topB.label.replace(/°/g, "").trim();
+  const spreadWord = band <= 4 ? "tight" : band <= 7 ? "moderate" : "wide";
+
+  // rationale
+  const basis = proj.nMembers > 1
+    ? `The ${proj.nMembers}-member GFS ensemble centers near ${Math.round(proj.rawMedian)}°F`
+    : `The deterministic GFS run projects near ${Math.round(proj.rawMedian)}°F`;
+  const calPhrase = (proj.calibrated && proj.calInfo)
+    ? `, and after the −${proj.calInfo.biasF}°F warm-bias correction and spread calibration it settles at ${predHigh}°F`
+    : ` (raw, uncalibrated)`;
+  const parts = [];
+  parts.push(`${basis}${calPhrase}.`);
+  parts.push(`The 10–90% range is ${proj.p10.toFixed(0)}–${proj.p90.toFixed(0)}°F — a ${spreadWord} ${band.toFixed(0)}° spread — so the most likely bin is ${cleanBin}°F at ${(topProb * 100).toFixed(0)}%.`);
+  if (desc && desc.sentence) parts.push(`Conditions: ${desc.sentence}`);
+  parts.push(peakBest
+    ? `High expected around ${peakBest}. Confidence: ${conf} (${spreadWord} distribution).`
+    : `Confidence: ${conf} (${spreadWord} distribution).`);
+
+  return {
+    valid: true, date, lockedAt: new Date().toISOString(),
+    predHigh, callLabel: topB.label, topProb, conf,
+    p10: proj.p10, p90: proj.p90, peakBest, rationale: parts.join(" "),
+  };
+}
+
+// Return the frozen call for a date. Locks at the first refresh at/after 10:00 AM PT
+// (today only); before that it shows a live, unlocked preview. Never fabricates a
+// retroactive lock for a past day the app wasn't open for.
+function getLockedAICall(date) {
+  const store = loadAICalls();
+  if (store[date] && store[date].valid) return store[date]; // already locked → frozen
+
+  const pac = pacificNowParts();
+  if (date !== pac.date) {
+    if (date > pac.date) {                       // future day → unlocked preview
+      const pv = computeAICall(date);
+      if (pv.valid) { pv.preview = true; return pv; }
+      return { valid: false, preLock: true };
+    }
+    return { valid: false, noLock: true };       // past day, never locked
+  }
+
+  if (pac.hour < AI_LOCK_HOUR_PT) {              // today, before 10 AM → preview
+    const pv = computeAICall(date);
+    if (pv.valid) { pv.preview = true; return pv; }
+    return { valid: false, preLock: true };
+  }
+
+  const call = computeAICall(date);             // today, at/after 10 AM → LOCK
+  if (call.valid) {
+    store[date] = call;
+    const keys = Object.keys(store).sort();
+    while (keys.length > 35) delete store[keys.shift()]; // keep ~last 35 dates
+    saveAICalls(store);
+    return call;
+  }
+  return { valid: false };                       // after 10 but data not ready yet
+}
+
+// Manual re-lock for the selected date (deliberate user action; does not auto-fire).
+function relockAICall() {
+  const store = loadAICalls();
+  delete store[state.selectedDate];
+  saveAICalls(store);
+  renderAICall();
+}
+
+function renderAICall() {
+  const statsEl = document.getElementById("aicall-stats");
+  const confEl  = document.getElementById("aicall-conf");
+  const whyEl   = document.getElementById("aicall-why");
+  const metaEl  = document.getElementById("aicall-meta");
+  if (!statsEl) return;
+  const call = getLockedAICall(state.selectedDate);
+
+  if (!call || !call.valid) {
+    statsEl.innerHTML = `<div style="color:#94a2b4">${call && call.noLock ? "no call locked for this date" : "waiting for model data…"}</div>`;
+    if (confEl) confEl.textContent = "—";
+    if (whyEl)  whyEl.textContent = call && call.noLock
+      ? "This date predates the locked-call feature, or the app wasn't open after 10 AM that day."
+      : "Today's call locks at the first refresh at/after 10:00 AM PT, then stays fixed.";
+    if (metaEl) metaEl.innerHTML = "";
+    return;
+  }
+
+  const isPreview = !!call.preview;
+  const confTone = call.conf === "High" ? "pos" : call.conf === "Low" ? "neg" : "accent";
+  if (confEl) confEl.textContent = isPreview ? "preview · unlocked" : (call.conf + " confidence");
+  statsEl.innerHTML = [
+    makeStat({ label: "Call (bin)", value: call.callLabel.replace(/°/g, "").trim(), unit: "°F", tone: "accent" }),
+    makeStat({ label: "Point high", value: String(call.predHigh), unit: "°F" }),
+    makeStat({ label: "Bin odds", value: (call.topProb * 100).toFixed(0), unit: "%", tone: confTone }),
+  ].join("");
+  whyEl.textContent = (isPreview ? "Preview — not locked yet; freezes at 10:00 AM PT. " : "") + call.rationale;
+  if (isPreview) {
+    metaEl.innerHTML = `<span>🔓 Locks 10:00 AM PT · ${call.date.slice(5)}</span>`;
+  } else {
+    const t = new Date(call.lockedAt).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+    metaEl.innerHTML = `<span>🔒 Locked ${t} · ${call.date.slice(5)} · does not change</span>`
+      + `<span onclick="relockAICall()" style="cursor:pointer;color:#60a5fa">↻ relock</span>`;
+  }
+}
+
+// Mirror how the official NWS climate report rounds a reading vs. how whole-°C
+// feeds / obs text-lists display it. The CLI rounds the PRECISE reading to whole
+// °F; a whole-°C feed rounds °C first, which can read a degree off at the boundary
+// (e.g. a true 16.7°C settles 62 but a whole-°C feed shows 63). Returns the
+// official settle value, the naive whole-°C display value, and whether they split.
+function settleRead(tF) {
+  const settles = Math.round(tF);                            // naive: round whatever °F we were handed
+  const tC = (tF - 32) * 5 / 9;
+  const wholeCF = Math.round(Math.round(tC) * 9 / 5 + 32);   // whole-°C feed path
+
+  // Is this value itself a whole-°C artifact? (feed gave whole °C, e.g. 17°C -> 62.6°F)
+  // A genuine tenths reading lands off the whole-°C grid; an artifact sits exactly on it.
+  const nC = Math.round(tC);
+  const isArtifact = Math.abs(tC - nC) < 0.06;
+
+  // If it's an artifact, the official CLI uses the PRECISE tenths, which are hidden inside
+  // the [nC-0.5, nC+0.5)°C bucket — a 1.8°F-wide window that can straddle a rounding line.
+  let settleLo = settles, settleHi = settles;
+  if (isArtifact) {
+    settleLo = Math.round((nC - 0.5) * 9 / 5 + 32);
+    settleHi = Math.round((nC + 0.5) * 9 / 5 + 32 - 1e-6);   // upper bound exclusive
+  }
+
+  return {
+    settles, wholeCF, rawF: tF, tC,
+    gap: wholeCF !== settles,
+    isArtifact, nC, settleLo, settleHi,
+    ambiguous: isArtifact && settleHi !== settleLo,
+    range: settleLo === settleHi ? `${settleLo}` : `${settleLo}–${settleHi}`
+  };
+}
+
+// The 2°F market bin (odd–even pair) a whole-°F value falls into, e.g. 64 -> "63-64".
+function binLabel(S) {
+  const lo = S % 2 === 0 ? S - 1 : S;
+  return `${lo}-${lo + 1}`;
+}
+
+function renderDrift() {
+  const bodyEl = document.getElementById("drift-body");
+  const statusEl = document.getElementById("drift-status");
+  if (!bodyEl) return;
+  const setStatus = (t) => { if (statusEl) statusEl.textContent = t; };
+
+  const date = state.selectedDate;
+  const isToday = state.days.length && date === state.days[0].date;
+  if (!isToday) {
+    bodyEl.innerHTML = `<div style="font-size:11px;color:#94a2b4;line-height:1.5">Drift tracking applies to today's live readings only — it watches the day unfold against the forecast.</div>`;
+    setStatus("—"); return;
+  }
+  const day = state.days.find(d => d.date === date);
+  const proj = getDayProjection(date);
+  if (!day || !proj || proj.median == null || !state.current || state.current.tempF == null) {
+    bodyEl.innerHTML = `<div style="font-size:11px;color:#94a2b4;line-height:1.5">Waiting for today's first live reading…</div>`;
+    setStatus("—"); return;
+  }
+
+  const median = proj.median;
+  const currentF = state.current.tempF;
+  let pacificHour;
+  try { pacificHour = parseInt(new Date().toLocaleString("en-US", { timeZone: TZ, hour12: false, hour: "numeric" }), 10); }
+  catch (e) { pacificHour = new Date().getHours(); }
+
+  const todayLocalDate = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  const todayObs = (state.obsHistory || []).filter(r => r.time.toLocaleDateString("en-CA", { timeZone: TZ }) === todayLocalDate);
+  let highSoFar = currentF;
+  if (todayObs.length) highSoFar = Math.max(currentF, ...todayObs.map(r => r.tempF));
+  const hsr = settleRead(highSoFar);
+
+  const aiCall = getLockedAICall(date);
+  const origEst = (aiCall && aiCall.valid) ? aiCall.predHigh : Math.round(median);
+
+  // observed minus forecast, hour by hour
+  const fcstByHour = {};
+  (day.hourly || []).forEach(h => { fcstByHour[h.hour] = h.temp; });
+  const obsByHour = {};
+  todayObs.forEach(r => {
+    const hr = parseInt(r.time.toLocaleString("en-US", { timeZone: TZ, hour12: false, hour: "numeric" }), 10);
+    if (!obsByHour[hr] || r.time > obsByHour[hr].t) obsByHour[hr] = { tempF: r.tempF, t: r.time };
+  });
+  const deltas = [];
+  Object.keys(obsByHour).forEach(k => {
+    const hr = parseInt(k, 10);
+    if (fcstByHour[hr] != null) deltas.push({ hour: hr, delta: obsByHour[k].tempF - fcstByHour[hr] });
+  });
+  if (deltas.length < 2) {
+    bodyEl.innerHTML = `<div style="font-size:11px;color:#94a2b4;line-height:1.5">Gathering readings — the drift call needs a couple of hours of live data to compare against the forecast.</div>`;
+    setStatus("warming up"); return;
+  }
+
+  deltas.sort((a, b) => b.hour - a.hour);
+  const recent = deltas.slice(0, 3);                          // last up-to-3 hours
+  const recentBias = recent.reduce((s, d) => s + d.delta, 0) / recent.length;
+  let peakHour = -1, peakT = -999;
+  (day.hourly || []).forEach(h => { if (h.temp > peakT) { peakT = h.temp; peakHour = h.hour; } });
+  const pastPeak = peakHour >= 0 && pacificHour > peakHour && (highSoFar - currentF) > 1;
+  const projHigh = Math.max(highSoFar, median + recentBias);  // persist bias, floor at high-so-far
+  const adjSettle = settleRead(projHigh).settles;
+  const origBin = binLabel(origEst), adjBin = binLabel(adjSettle), biasAbs = Math.abs(recentBias);
+
+  let icon, color, statusTxt, headline, sub;
+  if (pastPeak) {
+    icon = "🔒"; color = "#34d399"; statusTxt = "high in";
+    headline = `High likely in at ${hsr.ambiguous ? hsr.range : hsr.settles}°`;
+    sub = hsr.ambiguous
+      ? `Past the forecast peak (${fmtHour(peakHour)}) and cooling. But the high-so-far is a whole-°C reading (${hsr.nC}°C) — the official settles <b>${hsr.range}°</b> depending on the hidden tenths. Confirm against the NWS 6-hour ob.`
+      : `Past the forecast peak (${fmtHour(peakHour)}) and cooling — drift no longer matters. Settles <b>${hsr.settles}°</b> (${binLabel(hsr.settles)}).`;
+  } else if (adjBin === origBin) {
+    icon = "●"; color = "#34d399"; statusTxt = "on pace";
+    headline = `On pace — tracking ${origBin}°`;
+    sub = `Running ${recentBias >= 0 ? "+" : ""}${recentBias.toFixed(1)}° vs forecast. High still tracking your locked <b>${origBin}°</b> call.`;
+  } else if (adjSettle > origEst) {
+    icon = "📈"; color = "#fbbf24"; statusTxt = "running warm";
+    headline = `Tracking warm → ${adjBin}°`;
+    sub = `Running <b>${biasAbs.toFixed(1)}° warm</b> of forecast. If it holds, the high lands near <b>${adjBin}°</b> — above your ${origBin}° call.`;
+  } else {
+    icon = "📉"; color = "#60a5fa"; statusTxt = "running cool";
+    headline = `Tracking cool → ${adjBin}°`;
+    sub = `Running <b>${biasAbs.toFixed(1)}° cool</b> of forecast. If it holds, the high lands near <b>${adjBin}°</b> — below your ${origBin}° call.`;
+  }
+  setStatus(statusTxt);
+  bodyEl.innerHTML = `
+    <div style="display:flex;align-items:flex-start;gap:11px">
+      <div style="font-size:26px;line-height:1">${icon}</div>
+      <div>
+        <div style="font-size:15px;font-weight:600;color:${color}">${headline}</div>
+        <div style="font-size:11px;line-height:1.5;color:#cdd9e8;margin-top:3px">${sub}</div>
+      </div>
+    </div>
+    <div style="font-size:9px;color:#7e8ea4;margin-top:10px;line-height:1.4">vs locked call ${origBin}° · ${deltas.length}h of obs · assumes the current bias holds — won't see a frontal flip coming.</div>
+  `;
+}
+
+function renderAll() {
+  renderStatus();
+  renderDayStrip();
+  renderProjection();
+  renderAICall();
+  renderDrift();
+  renderConditions();
+  renderNearbyStations();
+  renderSynopticStations();
+  renderBuckets();
+  renderChart();
+  renderCurrent();
+  renderAlertsSummary();
+  renderCalLogStatus();
+  renderCalibPanel();
+  renderAccLogStatus();
+}
+
+function renderNearbyStations() {
+  const grid  = document.getElementById("leads-grid");
+  const sigEl = document.getElementById("leads-signal");
+  const sumEl = document.getElementById("leads-summary");
+  const panel = document.getElementById("leads-panel");
+  if (!grid || !panel) return;
+
+  // Only meaningful when "Today" is selected and we have a KSEA reading
+  const isToday = state.days.length && state.selectedDate === state.days[0].date;
+  panel.style.display = isToday ? "" : "none";
+  if (!isToday) return;
+
+  const ksea = state.current;
+  if (!ksea || ksea.tempF == null || !ksea.time) {
+    grid.innerHTML = "";
+    sumEl.textContent = "Need KSEA reading first.";
+    sigEl.textContent = "—";
+    sigEl.style.color = "#9ca3af";
+    return;
+  }
+  const kseaTemp = ksea.tempF;
+  const kseaAge  = Math.max(0, (Date.now() - new Date(ksea.time).getTime()) / 60000);
+
+  // Header row
+  let html = `
+    <div style="color:#9ca3af;font-size:9px;letter-spacing:0.1em;text-transform:uppercase">STN</div>
+    <div style="color:#9ca3af;font-size:9px;letter-spacing:0.1em;text-transform:uppercase">DIST</div>
+    <div style="color:#9ca3af;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;text-align:right">TEMP · AGE</div>
+    <div style="color:#9ca3af;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;text-align:right">VS KSEA</div>
+
+    <div style="color:#fcd34d;font-weight:600">KSEA</div>
+    <div style="color:#94a2b4">anchor</div>
+    <div style="text-align:right;color:#fcd34d;font-weight:600;font-variant-numeric:tabular-nums">
+      ${kseaTemp.toFixed(1)}°F <span style="color:#9ca3af;font-weight:400;font-size:10px">· ${kseaAge.toFixed(0)}m</span>
+    </div>
+    <div style="text-align:right;color:#9ca3af">—</div>
+  `;
+
+  let warmer = 0, cooler = 0, freshWarmer = 0, freshCooler = 0;
+  let maxAbsDelta = 0, maxDelta = 0;
+
+  for (const s of NEARBY_STATIONS) {
+    const obs = state.nearbyStations && state.nearbyStations[s.id];
+    if (!obs || obs.tempF == null) {
+      html += `
+        <div style="color:#eef3fa">${s.id}</div>
+        <div style="color:#94a2b4">${s.dist}</div>
+        <div style="text-align:right;color:#9ca3af">no data</div>
+        <div style="text-align:right;color:#9ca3af">—</div>
+      `;
+      continue;
+    }
+    const delta = obs.tempF - kseaTemp;
+    const age   = Math.max(0, (Date.now() - obs.time.getTime()) / 60000);
+    const isFresh = age < kseaAge - 2;          // >2 min fresher than KSEA
+    const isDivergent = Math.abs(delta) >= 0.8; // >=0.8°F apart
+
+    if (delta >  0.5) warmer++;
+    if (delta < -0.5) cooler++;
+    if (isFresh && delta >  0.8) freshWarmer++;
+    if (isFresh && delta < -0.8) freshCooler++;
+    if (Math.abs(delta) > maxAbsDelta) { maxAbsDelta = Math.abs(delta); maxDelta = delta; }
+
+    const deltaColor = Math.abs(delta) < 0.5 ? "#9ca3af"
+                     : delta > 0 ? "#f59e0b" : "#60a5fa";
+    const ageColor = isFresh ? "#34d399" : "#9ca3af";
+    const rowBg = (isFresh && isDivergent) ? "background:rgba(251,191,36,0.08);" : "";
+
+    html += `
+      <div style="color:#eef3fa;${rowBg}">${s.id}</div>
+      <div style="color:#94a2b4;${rowBg}">${s.dist}</div>
+      <div style="text-align:right;color:#eef3fa;font-variant-numeric:tabular-nums;${rowBg}">
+        ${obs.tempF.toFixed(1)}°F <span style="color:${ageColor};font-size:10px">· ${age.toFixed(0)}m</span>
+      </div>
+      <div style="text-align:right;color:${deltaColor};font-variant-numeric:tabular-nums;font-weight:${Math.abs(delta) >= 0.8 ? 600 : 400};${rowBg}">
+        ${delta > 0 ? "+" : ""}${delta.toFixed(1)}°F
+      </div>
+    `;
+  }
+  grid.innerHTML = html;
+
+  // Signal logic (tuned for 2 nearby stations)
+  if (freshWarmer >= 1 && maxDelta >= 1.0) {
+    sigEl.textContent = `LEAD: +${maxDelta.toFixed(1)}°F`;
+    sigEl.style.color = "#f59e0b";
+    sumEl.innerHTML = `<b style="color:#f59e0b">Warming signal.</b> ${freshWarmer} nearby station${freshWarmer>1?"s are":" is"} fresher AND warmer than KSEA by up to ${maxDelta.toFixed(1)}°F. KSEA's next update likely climbs.`;
+  } else if (freshCooler >= 1 && maxDelta <= -1.0) {
+    sigEl.textContent = `LEAD: ${maxDelta.toFixed(1)}°F`;
+    sigEl.style.color = "#60a5fa";
+    sumEl.innerHTML = `<b style="color:#60a5fa">Cooling signal.</b> ${freshCooler} nearby station${freshCooler>1?"s are":" is"} fresher AND cooler than KSEA by ${Math.abs(maxDelta).toFixed(1)}°F. Could be marine push — KSEA may drop.`;
+  } else if (warmer >= 2 && maxDelta >= 1.5) {
+    sigEl.textContent = `WARM REGION · +${maxDelta.toFixed(1)}°F`;
+    sigEl.style.color = "#f59e0b";
+    sumEl.innerHTML = `${warmer} nearby stations warmer than KSEA, but none fresher. Weaker signal.`;
+  } else if (cooler >= 2 && maxDelta <= -1.5) {
+    sigEl.textContent = `COOL REGION · ${maxDelta.toFixed(1)}°F`;
+    sigEl.style.color = "#60a5fa";
+    sumEl.innerHTML = `${cooler} nearby stations cooler than KSEA. Broad marine/cool airmass.`;
+  } else {
+    sigEl.textContent = "in sync";
+    sigEl.style.color = "#34d399";
+    sumEl.innerHTML = `Nearby stations within ~1°F of KSEA. No directional lead.`;
+  }
+}
+
+// =============================================================================
+// Alerts
+// =============================================================================
+const alertState = {
+  prev: null,         // last seen { tempF, dewF, rh, time }
+  history: [],        // recent alert messages
+  lastTrigger: 0,     // timestamp of last triggered alert (rate-limiting)
+};
+
+// RH from temp + dew point (Magnus formula, both in °C)
+function computeRH(tempC, dewC) {
+  if (tempC == null || dewC == null) return null;
+  const a = 17.625, b = 243.04;
+  const es = (T) => Math.exp((a * T) / (b + T));
+  return Math.max(0, Math.min(100, 100 * es(dewC) / es(tempC)));
+}
+
+function getThresholds() {
+  return {
+    temp: parseFloat(document.getElementById("alert-temp").value) || Infinity,
+    dew:  parseFloat(document.getElementById("alert-dew").value)  || Infinity,
+    rh:   parseFloat(document.getElementById("alert-rh").value)   || Infinity,
+  };
+}
+function alertsEnabled() {
+  return document.getElementById("alert-enabled").checked;
+}
+
+// Load saved threshold settings from localStorage
+function loadAlertSettings() {
+  try {
+    const s = JSON.parse(localStorage.getItem("ksea_alerts") || "{}");
+    if (s.temp != null) document.getElementById("alert-temp").value = s.temp;
+    if (s.dew  != null) document.getElementById("alert-dew").value  = s.dew;
+    if (s.rh   != null) document.getElementById("alert-rh").value   = s.rh;
+    if (s.enabled != null) document.getElementById("alert-enabled").checked = s.enabled;
+  } catch(e) {}
+}
+function saveAlertSettings() {
+  const s = {
+    temp: document.getElementById("alert-temp").value,
+    dew:  document.getElementById("alert-dew").value,
+    rh:   document.getElementById("alert-rh").value,
+    enabled: document.getElementById("alert-enabled").checked,
+  };
+  try { localStorage.setItem("ksea_alerts", JSON.stringify(s)); } catch(e) {}
+}
+
+// Permission state for notifications
+function refreshPermissionUI() {
+  const statusEl = document.getElementById("alerts-perm-status");
+  const btnEl    = document.getElementById("alerts-perm-btn");
+  const modeEl   = document.getElementById("alerts-mode");
+
+  // Detect protocols that can't fire system notifications (content://, file://, etc).
+  // Lock-screen notifications require https:// (or http://localhost). Hide the
+  // dead-end Enable button on unsupported protocols and just report in-app status.
+  const proto = window.location.protocol;
+  const canDoSystemNotifs = (proto === "https:" || proto === "http:") && ("Notification" in window);
+
+  if (!canDoSystemNotifs) {
+    statusEl.innerHTML = '<span style="color:#34d399">●</span> In-app alerts active — sound, vibration, banner';
+    statusEl.style.color = "#aab6c6";
+    btnEl.style.display = "none";
+    modeEl.textContent = "in-app";
+    return;
+  }
+
+  const p = Notification.permission;
+  if (p === "granted") {
+    statusEl.innerHTML = '<span style="color:#34d399">●</span> Lock-screen notifications enabled · sound · vibration';
+    statusEl.style.color = "#aab6c6";
+    btnEl.style.display = "none";
+    modeEl.textContent = "lock-screen + sound";
+  } else if (p === "denied") {
+    statusEl.textContent = "Notifications blocked in browser settings — in-app alerts still work";
+    statusEl.style.color = "#f87171";
+    btnEl.style.display = "none";
+    modeEl.textContent = "in-app only";
+  } else {
+    statusEl.textContent = "Lock-screen notifications: not yet enabled";
+    statusEl.style.color = "#aab6c6";
+    btnEl.style.display = "inline-block";
+    modeEl.textContent = "tap Enable";
+  }
+}
+
+async function requestNotificationPermission() {
+  if (!("Notification" in window)) return;
+  try {
+    const p = await Notification.requestPermission();
+    refreshPermissionUI();
+    if (p === "granted") {
+      // confirm with a small system notification
+      try { new Notification("KSEA alerts enabled", { body: "You'll get a system notification when conditions move past your thresholds.", silent: false }); } catch(e) {}
+    }
+  } catch(e) {}
+}
+
+// Triggers all alert channels: vibration, sound, notification, banner
+function triggerAlert(title, body) {
+  alertState.lastTrigger = Date.now();
+  const tsLocal = new Date().toLocaleTimeString("en-US", { timeZone: TZ, hour12: false });
+  alertState.history.unshift(`${tsLocal} — ${title}: ${body}`);
+  if (alertState.history.length > 15) alertState.history.pop();
+  renderAlertHistory();
+  document.getElementById("alert-last").textContent = "last: " + tsLocal;
+
+  // 1. Vibration (if supported)
+  try { if (navigator.vibrate) navigator.vibrate([300, 120, 300, 120, 500]); } catch(e) {}
+
+  // 2. Sound (a short two-tone beep)
+  try { playAlertSound(); } catch(e) {}
+
+  // 3. System notification (if permission granted; falls back silently if not)
+  try {
+    if ("Notification" in window && Notification.permission === "granted") {
+      const n = new Notification(title, {
+        body: body,
+        tag: "ksea-alert",
+        renotify: true,
+        requireInteraction: false,
+        silent: false,
+      });
+      // close after a few seconds in case the user doesn't tap
+      setTimeout(() => { try { n.close(); } catch(e) {} }, 12000);
+    }
+  } catch(e) {}
+
+  // 4. In-app banner (always shows, even from Downloads)
+  showBanner(title, body);
+}
+
+// Audio: synth a two-tone alert with WebAudio (no external file needed)
+let _audioCtx = null;
+function playAlertSound() {
+  if (!_audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    _audioCtx = new AC();
+  }
+  const ctx = _audioCtx;
+  if (ctx.state === "suspended") { try { ctx.resume(); } catch(e) {} }
+  const now = ctx.currentTime;
+  const beep = (freq, start, dur) => {
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.frequency.value = freq;
+    o.type = "sine";
+    g.gain.setValueAtTime(0, now + start);
+    g.gain.linearRampToValueAtTime(0.4, now + start + 0.02);
+    g.gain.linearRampToValueAtTime(0, now + start + dur);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(now + start); o.stop(now + start + dur + 0.05);
+  };
+  beep(880, 0,    0.18);
+  beep(660, 0.20, 0.18);
+  beep(880, 0.42, 0.22);
+}
+
+// In-app top banner that auto-dismisses
+function showBanner(title, body) {
+  let banner = document.getElementById("alert-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "alert-banner";
+    banner.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:1000;background:linear-gradient(180deg,#fbbf24,#f59e0b);color:#1a1205;padding:14px 18px;box-shadow:0 4px 18px rgba(0,0,0,0.25);font-weight:600;cursor:pointer;animation:slideDown 0.3s ease";
+    banner.onclick = () => banner.remove();
+    document.body.appendChild(banner);
+    const style = document.createElement("style");
+    style.textContent = "@keyframes slideDown { from { transform: translateY(-100%); } to { transform: translateY(0); } }";
+    document.head.appendChild(style);
+  }
+  banner.innerHTML = `<div style="font-size:13px">${title}</div><div style="font-size:11px;font-weight:400;margin-top:2px">${body}</div><div style="font-size:9px;font-weight:400;margin-top:4px;opacity:0.7">tap to dismiss</div>`;
+  // Auto-dismiss after 8 seconds
+  clearTimeout(banner._timer);
+  banner._timer = setTimeout(() => { if (banner.parentNode) banner.remove(); }, 8000);
+}
+
+function renderAlertHistory() {
+  const el = document.getElementById("alert-history");
+  if (!el) return;
+  if (alertState.history.length === 0) {
+    el.innerHTML = '<span style="color:#9ca3af">no alerts yet</span>';
+  } else {
+    el.innerHTML = alertState.history.map(h => `<div>${h}</div>`).join("");
+  }
+}
+
+// Called from refresh() after fetchAll completes
+function checkAlerts() {
+  if (!alertsEnabled() || !state.current) return;
+  const t = getThresholds();
+  const tempF = state.current.tempF;
+  const dewF  = state.current.dewF;
+  // RH needs C — back-convert from F we already have
+  const tempC = tempF != null ? (tempF - 32) * 5/9 : null;
+  const dewC  = dewF  != null ? (dewF  - 32) * 5/9 : null;
+  const rh    = computeRH(tempC, dewC);
+  const cur = { tempF, dewF, rh, time: Date.now() };
+
+  if (alertState.prev) {
+    const triggers = [];
+    if (tempF != null && alertState.prev.tempF != null) {
+      const d = tempF - alertState.prev.tempF;
+      if (Math.abs(d) >= t.temp) triggers.push(`temp ${d>=0?"+":""}${d.toFixed(1)}°F (${alertState.prev.tempF.toFixed(1)} → ${tempF.toFixed(1)})`);
+    }
+    if (dewF != null && alertState.prev.dewF != null) {
+      const d = dewF - alertState.prev.dewF;
+      if (Math.abs(d) >= t.dew) triggers.push(`dew ${d>=0?"+":""}${d.toFixed(1)}°F (${alertState.prev.dewF.toFixed(1)} → ${dewF.toFixed(1)})`);
+    }
+    if (rh != null && alertState.prev.rh != null) {
+      const d = rh - alertState.prev.rh;
+      if (Math.abs(d) >= t.rh) triggers.push(`RH ${d>=0?"+":""}${d.toFixed(0)}% (${alertState.prev.rh.toFixed(0)} → ${rh.toFixed(0)})`);
+    }
+    if (triggers.length > 0) {
+      triggerAlert("KSEA conditions changed", triggers.join(" · "));
+    }
+  }
+  alertState.prev = cur;
+}
+
+// Wire up event handlers once DOM is ready
+function setupAlertsUI() {
+  loadAlertSettings();
+  refreshPermissionUI();
+  renderAlertHistory();
+  ["alert-temp","alert-dew","alert-rh","alert-enabled"].forEach(id => {
+    document.getElementById(id).addEventListener("change", saveAlertSettings);
+  });
+  document.getElementById("alerts-perm-btn").addEventListener("click", requestNotificationPermission);
+  document.getElementById("alert-test-btn").addEventListener("click", () => {
+    triggerAlert("Test alert", "Sound, vibration, and notification working.");
+  });
+}
+
+// Pre-fill saved Synoptic token into the input (if any) on load
+function setupSynopticUI() {
+  const input = document.getElementById("synoptic-token-input");
+  if (input) input.value = getSynopticToken();
+}
+
+// =============================================================================
+// Lifecycle
+// =============================================================================
+async function refresh() {
+  try {
+    await fetchAll();
+    state.error = null;
+    state.lastFetch = Date.now();
+    checkAlerts();
+    logCalibrationObs();
+    logCloseInObs();
+    logAccuracySnapshot();
+  } catch (e) {
+    state.error = (e && e.message) || String(e);
+  } finally {
+    state.loading = false;
+    renderAll();
+  }
+}
+
+// =============================================================================
+// Calibration data logger
+// On every successful refresh, captures a paired (KSEA, KBFI, KRNT) reading
+// plus conditions into browser localStorage. Goal: accumulate ~2-3 weeks of
+// data so we can fit an offset model "KSEA = f(KBFI, KRNT, hour, cloud, wind)"
+// and use the freshest neighbor as a leading indicator for KSEA's real value.
+// =============================================================================
+const CAL_LOG_KEY = "ksea_cal_log_v1";
+const CAL_LOG_MAX = 15000;  // ~1-2 MB, well under localStorage limits
+
+function calLogRead() {
+  try { return JSON.parse(localStorage.getItem(CAL_LOG_KEY) || "[]"); }
+  catch (e) { return []; }
+}
+function calLogWrite(arr) {
+  try { localStorage.setItem(CAL_LOG_KEY, JSON.stringify(arr)); return true; }
+  catch (e) { console.warn("cal log write failed:", e); return false; }
+}
+
+function logCalibrationObs() {
+  if (!state.current || state.current.tempF == null || !state.current.time) return;
+  const ksea = state.current;
+  const nearby = state.nearbyStations || {};
+  const kbfi = nearby.KBFI;
+  const krnt = nearby.KRNT;
+  // Need KSEA + at least one nearby station to be useful
+  if (!kbfi && !krnt) return;
+
+  const log = calLogRead();
+  // Dedup: if the most recent entry has the same KSEA timestamp, skip
+  if (log.length > 0 && log[log.length-1].kseaTime === ksea.time) return;
+
+  // Compute local Pacific hour (decimal)
+  let pacHour;
+  try {
+    pacHour = parseFloat(new Date().toLocaleString("en-US",
+      { timeZone: TZ, hour12: false, hour: "numeric", minute: "numeric" })
+      .replace(/[^\d.:]/g,"").replace(":","."));
+  } catch (e) { pacHour = new Date().getHours(); }
+
+  const r2 = x => Math.round(x*100)/100;
+  const r1 = x => Math.round(x*10)/10;
+
+  log.push({
+    t: Date.now(),
+    kseaTime: ksea.time,
+    kseaTemp: r2(ksea.tempF),
+    kseaDew:  ksea.dewF != null ? r2(ksea.dewF) : null,
+    kseaSrc:  ksea.source || null,
+    kbfiTemp: kbfi ? r2(kbfi.tempF) : null,
+    kbfiTime: kbfi ? kbfi.time.toISOString() : null,
+    krntTemp: krnt ? r2(krnt.tempF) : null,
+    krntTime: krnt ? krnt.time.toISOString() : null,
+    cloud:    ksea.cloud != null ? ksea.cloud : null,
+    windMph:  ksea.windMph != null ? r1(ksea.windMph) : null,
+    windDir:  ksea.windDir != null ? ksea.windDir : null,
+    hour:     r1(pacHour),
+  });
+
+  // Trim oldest if over cap
+  if (log.length > CAL_LOG_MAX) log.splice(0, log.length - CAL_LOG_MAX);
+  calLogWrite(log);
+  renderCalLogStatus();
+}
+
+function calLogDownloadCSV() {
+  const log = calLogRead();
+  if (log.length === 0) { alert("No observations logged yet."); return; }
+  const headers = ["t","kseaTime","kseaTemp","kseaDew","kseaSrc","kbfiTemp","kbfiTime","krntTemp","krntTime","cloud","windMph","windDir","hour"];
+  const rows = [headers.join(",")];
+  for (const e of log) {
+    rows.push(headers.map(h => {
+      const v = e[h];
+      if (v == null) return "";
+      if (typeof v === "string") return `"${v.replace(/"/g,'""')}"`;
+      return v;
+    }).join(","));
+  }
+  const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ksea_cal_log_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function calLogClear() {
+  if (!confirm("Clear ALL logged data (core + close-in stations + forecast accuracy)? This cannot be undone.")) return;
+  try {
+    localStorage.removeItem(CAL_LOG_KEY);
+    localStorage.removeItem(SYN_LOG_KEY);
+    localStorage.removeItem(ACC_LOG_KEY);
+    renderCalLogStatus();
+    renderAccLogStatus();
+  } catch (e) {}
+}
+
+// =============================================================================
+// Close-in station logger (long format, one row per station per cycle)
+// Captures every Synoptic close-in station present each refresh, tagged by ID,
+// alongside the matching KSEA reading + conditions. Over 1-2 weeks this builds
+// enough paired data to score each station: which track KSEA within ~1°F, which
+// have a fixed warm/cool offset (usable with correction), and which are noise.
+// Kept separate from the core KBFI/KRNT log so neither schema interferes.
+// =============================================================================
+const SYN_LOG_KEY = "ksea_synoptic_log_v1";
+const SYN_LOG_MAX = 20000;   // ~covers months; each row is small
+
+function synLogRead() {
+  try { return JSON.parse(localStorage.getItem(SYN_LOG_KEY) || "[]"); } catch (e) { return []; }
+}
+function synLogWrite(arr) {
+  try { localStorage.setItem(SYN_LOG_KEY, JSON.stringify(arr)); return true; }
+  catch (e) { console.warn("syn log write failed:", e); return false; }
+}
+
+function logCloseInObs() {
+  if (!state.current || state.current.tempF == null || !state.current.time) return;
+  const syn = state.synoptic;
+  if (!syn || !syn.stations || syn.stations.length === 0) return;
+  const ksea = state.current;
+
+  const log = synLogRead();
+  // Dedup by cycle: if the latest row already has this KSEA timestamp, skip the batch
+  if (log.length > 0 && log[log.length-1].kseaTime === ksea.time) return;
+
+  let pacHour;
+  try {
+    pacHour = parseFloat(new Date().toLocaleString("en-US",
+      { timeZone: TZ, hour12: false, hour: "numeric", minute: "numeric" })
+      .replace(/[^\d.:]/g,"").replace(":","."));
+  } catch (e) { pacHour = new Date().getHours(); }
+
+  const r2 = x => x==null?null:Math.round(x*100)/100;
+  const r1 = x => x==null?null:Math.round(x*10)/10;
+  const now = Date.now();
+  const kseaTemp = r2(ksea.tempF);
+  const cloud    = ksea.cloud != null ? ksea.cloud : null;
+  const windMph  = r1(ksea.windMph);
+  const windDir  = ksea.windDir != null ? ksea.windDir : null;
+  const hour     = r1(pacHour);
+
+  for (const s of syn.stations) {
+    if (s.tempF == null) continue;
+    const ageMin = s.time ? Math.max(0, (now - s.time.getTime())/60000) : null;
+    log.push({
+      t: now, kseaTime: ksea.time, kseaTemp, hour, cloud, windMph, windDir,
+      sid: s.id, temp: r2(s.tempF), dew: r2(s.dewF),
+      ageMin: ageMin != null ? Math.round(ageMin) : null,
+      distMi: s.distMi != null ? r1(s.distMi) : null,
+      dir: s.dir || null,
+    });
+  }
+  if (log.length > SYN_LOG_MAX) log.splice(0, log.length - SYN_LOG_MAX);
+  synLogWrite(log);
+  renderCalLogStatus();
+}
+
+function synLogDownloadCSV() {
+  const log = synLogRead();
+  if (log.length === 0) { alert("No close-in station observations logged yet. Keep the app open through the day to build the dataset."); return; }
+  const headers = ["t","kseaTime","kseaTemp","hour","cloud","windMph","windDir","sid","temp","dew","ageMin","distMi","dir"];
+  const rows = [headers.join(",")];
+  for (const e of log) {
+    rows.push(headers.map(h => {
+      const v = e[h];
+      if (v == null) return "";
+      if (typeof v === "string") return `"${v.replace(/"/g,'""')}"`;
+      return v;
+    }).join(","));
+  }
+  const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ksea_stations_log_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function renderCalLogStatus() {
+  const el = document.getElementById("cal-log-status");
+  if (!el) return;
+  const log = calLogRead();
+  const synLog = synLogRead();
+  const synRows = synLog.length;
+  const synStns = synRows ? new Set(synLog.map(e => e.sid)).size : 0;
+
+  if (log.length === 0 && synRows === 0) {
+    el.textContent = "0 observations · logger ready";
+    return;
+  }
+
+  // time span across whichever logs have data
+  const firstT = Math.min(...[log.length ? log[0].t : Infinity, synRows ? synLog[0].t : Infinity]);
+  const lastT  = Math.max(...[log.length ? log[log.length-1].t : 0, synRows ? synLog[synRows-1].t : 0]);
+  const days = Math.max(0, (lastT - firstT) / 86400000);
+  const lastAgeMin = Math.max(0, (Date.now() - lastT) / 60000);
+  const lastTxt = lastAgeMin < 1 ? "just now" : lastAgeMin.toFixed(0)+"m ago";
+
+  const synTxt = synRows ? ` · ${synRows} stn-rows (${synStns} stns)` : "";
+  el.textContent = `${log.length} core${synTxt} · ${days.toFixed(1)}d · last ${lastTxt}`;
+}
+
+// =============================================================================
+// Calibration panel UI
+// =============================================================================
+function toggleCalibExpand() {
+  const exp = document.getElementById("calib-expanded");
+  const arrow = document.getElementById("calib-expand-arrow");
+  const collapsed = document.getElementById("calib-collapsed-row");
+  if (!exp) return;
+  const open = exp.style.display !== "none";
+  exp.style.display = open ? "none" : "";
+  if (collapsed) collapsed.style.display = open ? "" : "none";
+  if (arrow) arrow.textContent = open ? "▸" : "▾";
+}
+
+function renderCalibPanel() {
+  const modeEl = document.getElementById("calib-mode");
+  const sumEl = document.getElementById("calib-collapsed-summary");
+  const paramsEl = document.getElementById("calib-params");
+  if (modeEl) {
+    modeEl.textContent = CALIB.enabled ? "on" : "off";
+    modeEl.style.color = CALIB.enabled ? "#fcd34d" : "#9ca3af";
+  }
+  // Collapsed one-liner reflects the selected day's applied correction
+  const proj = state.selectedDate ? getDayProjection(state.selectedDate) : null;
+  if (sumEl) {
+    if (CALIB.enabled && proj && proj.calInfo) {
+      const ci = proj.calInfo;
+      sumEl.textContent = `bias −${ci.biasF.toFixed(1)}°F · spread ±${(ci.targetStd*1.2816).toFixed(1)}°F (${ci.season})`;
+    } else if (!CALIB.enabled) {
+      sumEl.textContent = "off · showing raw model output";
+    } else {
+      sumEl.textContent = `bias −${CALIB.biasF.toFixed(1)}°F · spread widened to realized error`;
+    }
+  }
+  if (paramsEl) {
+    const seasons = ["winter","spring","summer","fall"];
+    const stdline = seasons.map(s => `${s} ${CALIB.seasonStdF[s].toFixed(1)}`).join(" · ");
+    let leadLine = "";
+    if (proj && proj.calInfo) {
+      const ci = proj.calInfo;
+      const leadTxt = ci.lead === 0 ? "today" : ci.lead === 1 ? "tomorrow" : `+${ci.lead}d`;
+      leadLine = `<div>applied to ${leadTxt}: σ ${ci.targetStd.toFixed(1)}°F (member spread ${ci.memberStd.toFixed(1)}°F)</div>`;
+    }
+    paramsEl.innerHTML =
+      `<div>warm bias correction: −${CALIB.biasF.toFixed(1)}°F</div>` +
+      `<div>1σ error by season (°F): ${stdline}</div>` +
+      leadLine;
+  }
+}
+
+function setupCalibUI() {
+  const enabled = document.getElementById("calib-enabled");
+  const bias = document.getElementById("calib-bias");
+  if (enabled) {
+    enabled.checked = CALIB.enabled;
+    enabled.addEventListener("change", () => {
+      CALIB.enabled = enabled.checked;
+      saveCalibOverrides();
+      renderAll();
+    });
+  }
+  if (bias) {
+    bias.value = CALIB.biasF;
+    bias.addEventListener("change", () => {
+      const v = parseFloat(bias.value);
+      if (isFinite(v)) { CALIB.biasF = v; saveCalibOverrides(); renderAll(); }
+    });
+  }
+}
+
+// =============================================================================
+// Forecast-accuracy logger — the data that lets us refit the calibration.
+// Once per calendar day, snapshots that day's forecast (raw + calibrated median,
+// 80% band) at first load. Then tracks the realized high from live obs as the day
+// unfolds. Over weeks this yields forecast-vs-actual pairs to measure true bias and
+// spread and replace the starting-estimate parameters above with real numbers.
+// =============================================================================
+const ACC_LOG_KEY = "ksea_accuracy_log_v1";
+
+function accLogRead() {
+  try { return JSON.parse(localStorage.getItem(ACC_LOG_KEY) || "{}"); } catch (e) { return {}; }
+}
+function accLogWrite(obj) {
+  try { localStorage.setItem(ACC_LOG_KEY, JSON.stringify(obj)); return true; }
+  catch (e) { console.warn("acc log write failed:", e); return false; }
+}
+
+function logAccuracySnapshot() {
+  if (!state.days.length) return;
+  const today = state.days[0];
+  const proj = getDayProjection(today.date);
+  if (!proj) return;
+
+  const r1 = x => x==null?null:Math.round(x*10)/10;
+  let pacHour;
+  try {
+    pacHour = parseFloat(new Date().toLocaleString("en-US",
+      { timeZone: TZ, hour12: false, hour: "numeric", minute: "numeric" })
+      .replace(/[^\d.:]/g,"").replace(":","."));
+  } catch (e) { pacHour = new Date().getHours(); }
+
+  // realized high so far from real obs (preferred), else from hourly model fallback
+  let realizedHigh = null;
+  if (state.obsHistory && state.obsHistory.length) {
+    const todayLocal = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+    const todayObs = state.obsHistory.filter(r =>
+      r.time.toLocaleDateString("en-CA", { timeZone: TZ }) === todayLocal);
+    if (todayObs.length) realizedHigh = Math.max(...todayObs.map(r => r.tempF));
+  }
+
+  const log = accLogRead();
+  const rec = log[today.date] || {
+    date: today.date,
+    snapHour: r1(pacHour),
+    rawMedian: r1(proj.rawMedian),
+    calMedian: r1(proj.median),
+    calP10: r1(proj.p10),
+    calP90: r1(proj.p90),
+    biasF: CALIB.enabled ? CALIB.biasF : 0,
+    targetStd: proj.calInfo ? r1(proj.calInfo.targetStd) : null,
+    snappedAt: Date.now(),
+  };
+  // update realized high (monotonic max through the day)
+  if (realizedHigh != null) {
+    rec.realizedHigh = rec.realizedHigh != null ? Math.max(rec.realizedHigh, r1(realizedHigh)) : r1(realizedHigh);
+    rec.lastUpdate = Date.now();
+  }
+  log[today.date] = rec;
+
+  // keep only the most recent 120 days
+  const keys = Object.keys(log).sort();
+  if (keys.length > 120) for (const k of keys.slice(0, keys.length - 120)) delete log[k];
+
+  accLogWrite(log);
+  renderAccLogStatus();
+}
+
+function accLogDownloadCSV() {
+  const log = accLogRead();
+  const keys = Object.keys(log).sort();
+  if (keys.length === 0) { alert("No forecast-accuracy records yet. Open the app daily and it builds one row per day."); return; }
+  const headers = ["date","snapHour","rawMedian","calMedian","calP10","calP90","biasF","targetStd","realizedHigh","rawErr","calErr"];
+  const rows = [headers.join(",")];
+  for (const k of keys) {
+    const e = log[k];
+    const rawErr = (e.realizedHigh!=null && e.rawMedian!=null) ? Math.round((e.rawMedian - e.realizedHigh)*10)/10 : null;
+    const calErr = (e.realizedHigh!=null && e.calMedian!=null) ? Math.round((e.calMedian - e.realizedHigh)*10)/10 : null;
+    const row = { ...e, rawErr, calErr };
+    rows.push(headers.map(h => {
+      const v = row[h];
+      if (v == null) return "";
+      if (typeof v === "string") return `"${v.replace(/"/g,'""')}"`;
+      return v;
+    }).join(","));
+  }
+  const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ksea_accuracy_log_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function renderAccLogStatus() {
+  const el = document.getElementById("acc-log-status");
+  if (!el) return;
+  const log = accLogRead();
+  const keys = Object.keys(log);
+  if (keys.length === 0) { el.textContent = "0 days logged"; return; }
+  const scored = keys.filter(k => log[k].realizedHigh != null).length;
+  el.textContent = `${keys.length} day${keys.length>1?"s":""} logged · ${scored} with realized high`;
+}
+
+
+// =============================================================================
+// Radar / Wind / Cloud map (Leaflet + RainViewer radar + Open-Meteo wind/cloud)
+// Fails soft: if Leaflet or any source is unavailable, the rest of the app is
+// unaffected. RainViewer free tier = past-2h precipitation radar only (satellite
+// discontinued Jan 2026); wind + cloud come from Open-Meteo.
+// =============================================================================
+const MAP = {
+  map: null, base: null,
+  radarFrames: [], radarLayers: {}, radarIdx: 0, radarTimer: null, radarHost: "",
+  windGroup: null, cloudGroup: null,
+  on: { radar: false, wind: true, cloud: true },
+  inited: false,
+};
+
+function initMap() {
+  if (MAP.inited) return;
+  const statusEl = document.getElementById("map-status");
+  if (typeof L === "undefined") { if (statusEl) statusEl.textContent = "map unavailable"; return; }
+  const el = document.getElementById("ksea-map");
+  if (!el) return;
+  MAP.inited = true;
+  try {
+    MAP.map = L.map(el, { zoomControl: true, maxZoom: 11 }).setView([LAT, LON], 9);
+    MAP.base = L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+      maxZoom: 19, attribution: "© OpenStreetMap, © CARTO"
+    }).addTo(MAP.map);
+    L.circleMarker([LAT, LON], { radius: 6, color: "#fcd34d", weight: 2, fillColor: "#fbbf24", fillOpacity: 1 })
+      .addTo(MAP.map).bindTooltip("KSEA");
+    MAP.windGroup = L.layerGroup();
+    MAP.cloudGroup = L.layerGroup();
+    if (MAP.on.wind) MAP.windGroup.addTo(MAP.map);
+    if (MAP.on.cloud) MAP.cloudGroup.addTo(MAP.map);
+    setTimeout(() => { try { MAP.map.invalidateSize(); } catch(e){} }, 250);
+    if (statusEl) statusEl.textContent = "live";
+    loadRadar();
+    loadWindCloud();
+  } catch (e) {
+    if (statusEl) statusEl.textContent = "map error";
+    console.warn("map init failed:", e);
+  }
+}
+
+async function loadRadar() {
+  try {
+    const r = await fetch("https://api.rainviewer.com/public/weather-maps.json");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    MAP.radarHost = j.host || "https://tilecache.rainviewer.com";
+    const past = (j.radar && j.radar.past) || [];
+    MAP.radarFrames = past.map(f => ({ time: f.time, url: `${MAP.radarHost}${f.path}/256/{z}/{x}/{y}/2/1_1.png` }));
+    if (MAP.radarFrames.length) {
+      MAP.radarIdx = MAP.radarFrames.length - 1;
+      const playBtn = document.getElementById("radar-play");
+      if (playBtn) playBtn.style.display = "";
+      if (MAP.on.radar) showRadarFrame(MAP.radarIdx);
+    }
+  } catch (e) {
+    console.warn("radar load failed:", e);
+    const t = document.getElementById("radar-time");
+    if (t && MAP.on.radar) t.textContent = "radar unavailable";
+  }
+}
+
+function radarLayerFor(frame) {
+  if (!MAP.radarLayers[frame.url]) {
+    MAP.radarLayers[frame.url] = L.tileLayer(frame.url, { opacity: 0.7, maxNativeZoom: 7, maxZoom: 11, zIndex: 300 });
+  }
+  return MAP.radarLayers[frame.url];
+}
+
+function showRadarFrame(idx) {
+  if (!MAP.map || !MAP.radarFrames.length) return;
+  idx = (idx + MAP.radarFrames.length) % MAP.radarFrames.length;
+  MAP.radarIdx = idx;
+  const frame = MAP.radarFrames[idx];
+  for (const url in MAP.radarLayers) {
+    if (url !== frame.url && MAP.map.hasLayer(MAP.radarLayers[url])) MAP.map.removeLayer(MAP.radarLayers[url]);
+  }
+  const layer = radarLayerFor(frame);
+  if (!MAP.map.hasLayer(layer)) layer.addTo(MAP.map);
+  const t = document.getElementById("radar-time");
+  if (t) {
+    const d = new Date(frame.time * 1000);
+    const hhmm = d.toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+    const rel = idx === MAP.radarFrames.length - 1 ? "now" : `${Math.round((Date.now()/1000 - frame.time)/60)}m ago`;
+    t.textContent = `radar: ${hhmm} (${rel})`;
+  }
+}
+
+function radarPlayToggle() {
+  const btn = document.getElementById("radar-play");
+  if (MAP.radarTimer) {
+    clearInterval(MAP.radarTimer); MAP.radarTimer = null;
+    if (btn) btn.textContent = "▶ play";
+  } else {
+    if (!MAP.on.radar) toggleMapLayer("radar");
+    MAP.radarTimer = setInterval(() => showRadarFrame(MAP.radarIdx + 1), 500);
+    if (btn) btn.textContent = "⏸ stop";
+  }
+}
+
+async function loadWindCloud() {
+  if (!MAP.map) return;
+  const lats = [], lons = [];
+  const lat0 = 47.10, lat1 = 47.78, lon0 = -122.75, lon1 = -121.95, N = 6;
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    lats.push((lat0 + (lat1 - lat0) * i / (N - 1)).toFixed(3));
+    lons.push((lon0 + (lon1 - lon0) * j / (N - 1)).toFixed(3));
+  }
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(",")}&longitude=${lons.join(",")}`
+    + `&current=wind_speed_10m,wind_direction_10m,cloud_cover&wind_speed_unit=mph&timezone=auto`;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    let arr = await r.json();
+    if (!Array.isArray(arr)) arr = [arr];
+    MAP.windGroup.clearLayers();
+    MAP.cloudGroup.clearLayers();
+    for (const pt of arr) {
+      const la = pt.latitude, lo = pt.longitude, c = pt.current || {};
+      if (la == null || lo == null) continue;
+      const spd = c.wind_speed_10m, dir = c.wind_direction_10m, cloud = c.cloud_cover;
+      if (cloud != null) {
+        L.circleMarker([la, lo], { radius: 16, stroke: false, fillColor: "#64748b",
+          fillOpacity: Math.max(0, Math.min(0.55, (cloud/100) * 0.55)) }).addTo(MAP.cloudGroup);
+      }
+      if (spd != null && dir != null) {
+        const toward = (dir + 180) % 360;
+        const col = spd < 5 ? "#94a3b8" : spd < 12 ? "#fcd34d" : "#f87171";
+        const icon = L.divIcon({ className: "wind-arrow",
+          html: `<svg width="26" height="26" viewBox="0 0 26 26" style="transform:rotate(${toward}deg)"><line x1="13" y1="20" x2="13" y2="6" stroke="${col}" stroke-width="2"/><polygon points="13,3 9,10 17,10" fill="${col}"/></svg>`,
+          iconSize: [26, 26], iconAnchor: [13, 13] });
+        L.marker([la, lo], { icon }).addTo(MAP.windGroup).bindTooltip(`${Math.round(spd)} mph from ${compass8(dir)}`, { direction: "top" });
+      }
+    }
+  } catch (e) { console.warn("wind/cloud load failed:", e); }
+}
+
+function toggleMapLayer(which) {
+  MAP.on[which] = !MAP.on[which];
+  const btn = document.getElementById("layer-" + which);
+  if (btn) btn.classList.toggle("on", MAP.on[which]);
+  if (!MAP.map) return;
+  if (which === "radar") {
+    if (MAP.on.radar) { if (MAP.radarFrames.length) showRadarFrame(MAP.radarIdx); }
+    else {
+      if (MAP.radarTimer) { clearInterval(MAP.radarTimer); MAP.radarTimer = null; const pb=document.getElementById("radar-play"); if(pb) pb.textContent="▶ play"; }
+      for (const url in MAP.radarLayers) if (MAP.map.hasLayer(MAP.radarLayers[url])) MAP.map.removeLayer(MAP.radarLayers[url]);
+      const t = document.getElementById("radar-time"); if (t) t.textContent = "";
+    }
+  } else if (which === "wind") {
+    if (MAP.on.wind) MAP.windGroup.addTo(MAP.map); else MAP.map.removeLayer(MAP.windGroup);
+  } else if (which === "cloud") {
+    if (MAP.on.cloud) MAP.cloudGroup.addTo(MAP.map); else MAP.map.removeLayer(MAP.cloudGroup);
+  }
+}
+
+loadCalibOverrides();
+setupAlertsUI();
+setupSynopticUI();
+setupCalibUI();
+initMap();
+const tzAbbrEl = document.querySelector(".clock-tz");
+if (tzAbbrEl) {
+  try {
+    tzAbbrEl.textContent = new Intl.DateTimeFormat("en-US", { timeZone: TZ, timeZoneName: "short" })
+      .formatToParts(new Date()).find(p => p.type === "timeZoneName").value || "PT";
+  } catch (e) { tzAbbrEl.textContent = "PT"; }
+}
+document.getElementById("clock").textContent = fmtClock();
+setInterval(() => { document.getElementById("clock").textContent = fmtClock(); }, 1000);
+refresh();
+setInterval(refresh, 300_000); // refresh every 5 min (model data doesn't change faster)
+setInterval(() => { if (MAP.inited) { loadRadar(); loadWindCloud(); } }, 300_000);
+setInterval(renderStatus, 5000);
+window.addEventListener("resize", () => { renderChart(); if (MAP.map) { try { MAP.map.invalidateSize(); } catch(e){} } });
+</script>
+</body>
+</html>
