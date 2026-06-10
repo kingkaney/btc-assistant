@@ -176,6 +176,12 @@
   <div class="panel-body" id="drift-body"></div>
 </div>
 
+<!-- KALSHI EDGE + KELLY SIZING (manual price entry — Kalshi API blocks browsers) -->
+<div class="panel" id="edge-panel">
+  <div class="panel-head"><span>💰 Edge &amp; Size</span><span class="accent" id="edge-status">—</span></div>
+  <div class="panel-body" id="edge-body"></div>
+</div>
+
 <!-- OFFICIAL SETTLE + SCORECARD (NWS CLI auto-pull) -->
 <div class="panel" id="score-panel">
   <div class="panel-head"><span>🏛 Official Settle · Scorecard</span><span class="accent" id="score-status">—</span></div>
@@ -186,6 +192,12 @@
 <div class="panel" id="blip-panel">
   <div class="panel-head"><span>🔬 1-Min Blip Risk</span><span class="accent" id="blip-status">—</span></div>
   <div class="panel-body" id="blip-body"><div style="font-size:11px;color:#94a2b4">fetching one-minute archive…</div></div>
+</div>
+
+<!-- LIVE 1-MIN FEED (MADIS-ready; sleeps until a relay URL is configured) -->
+<div class="panel" id="live1m-panel">
+  <div class="panel-head"><span>📶 Live 1-Min Feed</span><span class="accent" id="live1m-status">off</span></div>
+  <div class="panel-body" id="live1m-body"></div>
 </div>
 
 <!-- LIVE CONDITIONS SUMMARY (today only) -->
@@ -2271,6 +2283,227 @@ function renderBlip() {
   bodyEl.innerHTML = html;
 }
 
+// =============================================================================
+// Kalshi edge & Kelly sizing (manual price entry — Kalshi's API blocks browsers,
+// so you type the YES cents off the board; the app does the rest)
+// =============================================================================
+const EDGE_KEY = "ksea_edge_v1";
+function loadEdge() { try { return JSON.parse(localStorage.getItem(EDGE_KEY) || "{}"); } catch (e) { return {}; } }
+function saveEdge(o) {
+  if (o.dates) {                                   // prune entries older than 14 days
+    const cut = new Date(Date.now() - 14 * 86400 * 1000).toISOString().slice(0, 10);
+    Object.keys(o.dates).forEach(d => { if (d < cut) delete o.dates[d]; });
+  }
+  try { localStorage.setItem(EDGE_KEY, JSON.stringify(o)); } catch (e) {}
+}
+// Kalshi taker fee ≈ 0.07 · price · (1 − price), in cents per contract
+function kalshiFee(c) { return 0.07 * c * (100 - c) / 100; }
+
+function edgeSetPrice(idx, val) {
+  const s = loadEdge(); s.dates = s.dates || {};
+  const d = state.selectedDate;
+  const e = s.dates[d] || (s.dates[d] = { prices: {}, at: 0 });
+  const c = parseFloat(val);
+  if (isFinite(c) && c >= 1 && c <= 99) e.prices[idx] = c; else delete e.prices[idx];
+  e.at = Date.now();
+  saveEdge(s); renderEdge();
+}
+function edgeSetBank(val) {
+  const s = loadEdge(); const b = parseFloat(val);
+  if (isFinite(b) && b > 0) s.bank = b;
+  saveEdge(s); renderEdge();
+}
+function edgeClear() {
+  const s = loadEdge();
+  if (s.dates) delete s.dates[state.selectedDate];
+  saveEdge(s); renderEdge();
+}
+
+function renderEdge() {
+  const bodyEl = document.getElementById("edge-body");
+  const statusEl = document.getElementById("edge-status");
+  if (!bodyEl) return;
+  const date = state.selectedDate;
+  const proj = date ? getDayProjection(date) : null;
+  if (!proj || !proj.buckets || !proj.probs || !proj.probs.length) {
+    bodyEl.innerHTML = `<div style="font-size:11px;color:#94a2b4">Waiting for ensemble buckets…</div>`;
+    if (statusEl) statusEl.textContent = "—"; return;
+  }
+  const s = loadEdge();
+  const bank = s.bank || 100;
+  const ent = (s.dates && s.dates[date]) || { prices: {} };
+  const calN = gradeScore().stats.n;
+  const capped = calN < 15;
+
+  let best = null;
+  let rowsHtml = "";
+  proj.buckets.forEach((b, i) => {
+    const p = proj.probs[i] || 0;
+    const priceVal = ent.prices[i] != null ? ent.prices[i] : "";
+    let calc = `<span style="color:#56657a">—</span>`;
+    if (priceVal !== "") {
+      const c = +priceVal, fee = kalshiFee(c), pc = p * 100;
+      const eYes = pc - c - fee, eNo = c - pc - fee;
+      const side = eYes >= eNo ? "YES" : "NO";
+      const edge = Math.max(eYes, eNo);
+      const cost = (side === "YES" ? c + fee : (100 - c) + fee) / 100;   // $ per contract, fee-loaded
+      const pWin = side === "YES" ? p : 1 - p;
+      let f = (pWin - cost) / (1 - cost);
+      let fQ = Math.max(0, f) / 4;
+      if (capped) fQ = Math.min(fQ, 0.05);
+      const nCon = edge > 0 ? Math.floor(bank * fQ / cost) : 0;
+      const col = edge >= 5 ? "#34d399" : edge > 0 ? "#9ca8b8" : "#f87171";
+      calc = `<span style="color:${col};font-weight:600">${side} ${edge >= 0 ? "+" : ""}${edge.toFixed(1)}¢</span>`
+           + (edge >= 5 && nCon > 0 ? ` <span style="color:#7e8ea4">· ¼K ${nCon}x</span>` : edge > 0 && edge < 5 ? ` <span style="color:#56657a">· noise</span>` : "");
+      if (edge >= 5 && (!best || edge > best.edge)) best = { label: b.label, side, edge, nCon };
+    }
+    rowsHtml += `<div style="display:flex;align-items:center;gap:7px;padding:3px 0;font-size:11px;font-variant-numeric:tabular-nums">
+      <span style="min-width:54px;color:#cdd9e8">${b.label}</span>
+      <span style="min-width:38px;color:#94a2b4">${(p * 100).toFixed(0)}%</span>
+      <input type="number" inputmode="numeric" min="1" max="99" placeholder="¢" value="${priceVal}"
+        onchange="edgeSetPrice(${i}, this.value)"
+        style="width:50px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:#eef3fa;padding:3px 6px;font-size:11px">
+      <span style="flex:1;text-align:right">${calc}</span>
+    </div>`;
+  });
+
+  if (statusEl) statusEl.textContent = best ? `${best.side} ${best.label}` : "—";
+
+  let html = `<div style="display:flex;align-items:center;gap:8px;font-size:10px;color:#94a2b4;margin-bottom:7px">
+    <span>bankroll $</span><input type="number" inputmode="numeric" value="${bank}" onchange="edgeSetBank(this.value)"
+      style="width:64px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:#eef3fa;padding:3px 6px;font-size:11px">
+    <a href="#" onclick="edgeClear();return false" style="color:#60a5fa;margin-left:auto">clear prices</a></div>`;
+  html += rowsHtml;
+  if (best) {
+    html += `<div style="margin-top:8px;padding:7px 9px;background:rgba(52,211,153,0.08);border-left:2px solid #34d399;border-radius:4px;font-size:11px;color:#a7f3d0">
+      Best: <b>${best.side} ${best.label}°</b> · net edge <b>+${best.edge.toFixed(1)}¢</b> after fees · quarter-Kelly ≈ <b>${best.nCon}</b> contracts</div>`;
+  }
+  html += `<div style="margin-top:7px;font-size:9px;color:#7e8ea4;line-height:1.5">Enter YES ¢ off the Kalshi board. Fees (~7% × p × 1−p) included; your fill vs the one price you typed (spread) is not. Edges under 5¢ net are noise.${
+    capped ? ` <span style="color:#fbbf24">Model unvalidated (${calN} graded days) — size capped at 5% bankroll until the scorecard proves it.</span>` : ""}</div>`;
+  bodyEl.innerHTML = html;
+}
+
+// =============================================================================
+// Live 1-min feed (MADIS-ready). Sleeps until a relay URL is set. Contract:
+// the URL returns JSON — either [{t, tempF}, ...] or {points:[...]} — covering
+// recent minutes. t = epoch ms/s or ISO. Once MADIS access lands, a small
+// Termux relay script outputs exactly that.
+// =============================================================================
+const L1M_KEY = "ksea_live1m_v1";
+function loadL1M() { try { return JSON.parse(localStorage.getItem(L1M_KEY) || "{}"); } catch (e) { return {}; } }
+function saveL1M(o) { try { localStorage.setItem(L1M_KEY, JSON.stringify(o)); } catch (e) {} }
+
+function l1mSetUrl(v) {
+  const s = loadL1M();
+  s.url = String(v || "").trim();
+  s.error = null;
+  saveL1M(s);
+  if (s.url) pollLive1m(true); else renderLive1m();
+}
+
+function l1mParsePoint(it) {
+  if (!it || typeof it !== "object") return null;
+  let t = it.t != null ? it.t : it.time != null ? it.time : it.valid != null ? it.valid : it.ts;
+  let ms = typeof t === "number" ? (t > 1e12 ? t : t * 1000) : Date.parse(t);
+  if (!isFinite(ms)) return null;
+  let f = it.tempF != null ? +it.tempF
+        : it.tmpf  != null ? +it.tmpf
+        : it.tempC != null ? it.tempC * 9 / 5 + 32
+        : it.temp_c != null ? it.temp_c * 9 / 5 + 32
+        : it.temp  != null ? +it.temp : null;
+  if (f == null || !isFinite(f) || f < -40 || f > 130) return null;
+  return { t: ms, f: +f.toFixed(1) };
+}
+
+async function pollLive1m(force) {
+  const s = loadL1M();
+  if (!s.url) { renderLive1m(); return; }
+  const now = Date.now();
+  if (!force && s.lastPoll && now - s.lastPoll < 55 * 1000) { renderLive1m(); return; }
+  s.lastPoll = now; saveL1M(s);
+  try {
+    const r = await fetch(s.url);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    const arr = Array.isArray(j) ? j : (j.points || j.data || j.obs || []);
+    const today = climateDayOfUTC(now);
+    const pts = {};                                   // dedupe by minute, current climate day only
+    (s.points || []).forEach(p => { if (climateDayOfUTC(p.t) === today) pts[Math.floor(p.t / 60000)] = p; });
+    arr.map(l1mParsePoint).filter(Boolean).forEach(p => {
+      if (climateDayOfUTC(p.t) === today) pts[Math.floor(p.t / 60000)] = p;
+    });
+    s.points = Object.values(pts).sort((a, b) => a.t - b.t).slice(-1600);
+    s.error = null;
+  } catch (e) {
+    s.error = String((e && e.message) || e);
+  }
+  saveL1M(s);
+  renderLive1m();
+}
+
+function renderLive1m() {
+  const bodyEl = document.getElementById("live1m-body");
+  const statusEl = document.getElementById("live1m-status");
+  if (!bodyEl) return;
+  const s = loadL1M();
+  const urlRow = `<div style="display:flex;align-items:center;gap:7px;font-size:10px;color:#94a2b4;margin-bottom:7px">
+    <span>relay URL</span><input type="url" placeholder="http://… (Termux relay)" value="${s.url || ""}"
+      onchange="l1mSetUrl(this.value)"
+      style="flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:#eef3fa;padding:3px 7px;font-size:10px"></div>`;
+
+  if (!s.url) {
+    if (statusEl) statusEl.textContent = "off";
+    bodyEl.innerHTML = urlRow + `<div style="font-size:10.5px;color:#94a2b4;line-height:1.55">
+      Sleeping until a 1-min source exists. The play: register for NOAA <b>MADIS</b> (free, takes days to approve),
+      then a small Termux relay script polls MADIS and serves JSON here — Claude writes that script the day access lands.
+      Even 3–5 min late, between-mark blips permanently raise the known settle floor.</div>`;
+    return;
+  }
+
+  const pts = s.points || [];
+  if (s.error) {
+    if (statusEl) statusEl.textContent = "error";
+    bodyEl.innerHTML = urlRow + `<div style="font-size:11px;color:#fca5a5">Relay unreachable (${s.error}). <a href="#" onclick="pollLive1m(true);return false" style="color:#60a5fa">↻ retry</a></div>`;
+    return;
+  }
+  if (!pts.length) {
+    if (statusEl) statusEl.textContent = "waiting";
+    bodyEl.innerHTML = urlRow + `<div style="font-size:11px;color:#94a2b4">Connected — waiting for points. <a href="#" onclick="pollLive1m(true);return false" style="color:#60a5fa">↻ poll now</a></div>`;
+    return;
+  }
+
+  const last = pts[pts.length - 1];
+  const ageMin = (Date.now() - last.t) / 60000;
+  let mx = pts[0];
+  pts.forEach(p => { if (p.f > mx.f) mx = p; });
+
+  // visible high from the regular feed, for comparison
+  let visHigh = state.current && state.current.tempF != null ? state.current.tempF : null;
+  try {
+    const todayLocalDate = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+    (state.obsHistory || []).forEach(r => {
+      if (r.time.toLocaleDateString("en-CA", { timeZone: TZ }) === todayLocalDate && (visHigh == null || r.tempF > visHigh)) visHigh = r.tempF;
+    });
+  } catch (e) {}
+
+  const blip = visHigh != null && Math.round(mx.f) > Math.round(visHigh);
+  if (statusEl) statusEl.textContent = blip ? "⚡ blip" : "live";
+  const tStr = new Date(mx.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+
+  let html = urlRow;
+  html += `<div style="display:flex;gap:14px;font-size:12px;color:#eef3fa;font-variant-numeric:tabular-nums">
+    <span>latest <b style="color:#fcd34d">${last.f.toFixed(1)}°</b> <span style="color:#7e8ea4;font-size:10px">${ageMin.toFixed(0)}m ago</span></span>
+    <span>1-min max <b style="color:#fcd34d">${mx.f.toFixed(1)}°</b> <span style="color:#7e8ea4;font-size:10px">@ ${tStr}</span></span></div>`;
+  if (blip) {
+    html += `<div style="margin-top:7px;padding:7px 9px;background:rgba(251,191,36,0.10);border-left:2px solid #fbbf24;border-radius:4px;font-size:11px;line-height:1.5;color:#fde68a">
+      ⚡ Invisible blip: 1-min max <b>${mx.f.toFixed(1)}°</b> rounds to <b>${Math.round(mx.f)}°</b> — above the visible feed's ${visHigh != null ? visHigh.toFixed(1) + "°" : "?"}. Settle floor is now ${Math.round(mx.f)}°.</div>`;
+  } else if (visHigh != null) {
+    html += `<div style="margin-top:6px;font-size:10px;color:#94a2b4">No invisible blips so far — 1-min max agrees with the visible feed (${visHigh.toFixed(1)}°).</div>`;
+  }
+  if (ageMin > 10) html += `<div style="margin-top:5px;font-size:10px;color:#fca5a5">⚠ feed stale (${ageMin.toFixed(0)} min) — relay may be down.</div>`;
+  bodyEl.innerHTML = html;
+}
+
 function renderDrift() {
   const bodyEl = document.getElementById("drift-body");
   const statusEl = document.getElementById("drift-status");
@@ -2372,8 +2605,10 @@ function renderAll() {
   renderProjection();
   renderAICall();
   renderDrift();
+  renderEdge();
   renderScorecard();
   renderBlip();
+  renderLive1m();
   renderConditions();
   renderNearbyStations();
   renderSynopticStations();
@@ -3310,6 +3545,7 @@ fetchCLI();                       // official climate reports: on load…
 setInterval(() => fetchCLI(), 1_800_000); // …and every 30 min (CLI only updates ~2×/day)
 setTimeout(() => fetchBlip(), 4000);      // 1-min archive backfill: after first paint…
 setInterval(() => fetchBlip(), 1_800_000); // …then every 30 min (archive lags days anyway)
+setInterval(() => pollLive1m(), 60_000);   // live 1-min relay: poll each minute (no-op until URL set)
 setInterval(() => { if (MAP.inited) { loadRadar(); loadWindCloud(); } }, 300_000);
 setInterval(renderStatus, 5000);
 window.addEventListener("resize", () => { renderChart(); if (MAP.map) { try { MAP.map.invalidateSize(); } catch(e){} } });
