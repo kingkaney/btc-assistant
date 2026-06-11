@@ -2440,7 +2440,7 @@ async function pollLive1m(force) {
   const s = loadL1M();
   if (!s.url) { renderLive1m(); return; }
   const now = Date.now();
-  if (!force && s.lastPoll && now - s.lastPoll < 55 * 1000) { renderLive1m(); return; }
+  if (!force && s.lastPoll && now - s.lastPoll < 12 * 1000) { renderLive1m(); return; }
   s.lastPoll = now; saveL1M(s);
   try {
     const r = await fetch(s.url);
@@ -3677,7 +3677,7 @@ fetchCLI();                       // official climate reports: on load…
 setInterval(() => fetchCLI(), 1_800_000); // …and every 30 min (CLI only updates ~2×/day)
 setTimeout(() => fetchBlip(), 4000);      // 1-min archive backfill: after first paint…
 setInterval(() => fetchBlip(), 1_800_000); // …then every 30 min (archive lags days anyway)
-setInterval(() => pollLive1m(), 60_000);   // live 1-min relay: poll each minute (no-op until URL set)
+setInterval(() => pollLive1m(), 15_000);   // live 1-min feed: poll every 15s (feed mints 1 pt/min; this just catches it fast)
 setInterval(() => { if (MAP.inited) { loadRadar(); loadWindCloud(); } }, 300_000);
 setInterval(renderStatus, 5000);
 window.addEventListener("resize", () => { renderChart(); if (MAP.map) { try { MAP.map.invalidateSize(); } catch(e){} } });
