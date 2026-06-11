@@ -2622,6 +2622,55 @@ function renderDrift() {
   const aiCall = getLockedAICall(date);
   const origEst = (aiCall && aiCall.valid) ? aiCall.predHigh : Math.round(median);
 
+  // ---- Path to target: what it takes from here, recomputed live ----
+  let callLo;
+  {
+    const m = String((aiCall && aiCall.valid && aiCall.callLabel) || "").match(/(\d+)\s*[-–]\s*(\d+)/);
+    callLo = m ? parseInt(m[1], 10) : (origEst % 2 === 0 ? origEst - 1 : origEst);
+  }
+  const needT = callLo - 0.5;                    // precise temp that settles into the bin floor
+  const capT = callLo + 1.5;                     // precise temp that escapes the bin out the top
+  let rate = null;                               // observed warming rate, last ~75 min
+  {
+    const cutoff = Date.now() - 75 * 60000;
+    const recentObs = todayObs.filter(r => r.time.getTime() >= cutoff).sort((a, b) => a.time - b.time);
+    if (recentObs.length >= 2) {
+      const a = recentObs[0], b = recentObs[recentObs.length - 1];
+      const spanMin = (b.time - a.time) / 60000;
+      if (spanMin >= 20) rate = (b.tempF - a.tempF) / (spanMin / 60);
+    }
+  }
+  let pkHr = -1, pkT2 = -999;
+  (day.hourly || []).forEach(h => { if (h.temp > pkT2) { pkT2 = h.temp; pkHr = h.hour; } });
+  const hrsLeft = pkHr >= 0 ? Math.max(0, pkHr - pacificHour) : 0;
+  let pathBlock = "";
+  if (highSoFar >= needT) {
+    const head = capT - highSoFar;
+    const stillWarming = rate != null && rate > 0.2 && hrsLeft > 0;
+    pathBlock = `<div style="margin-top:9px;padding:7px 9px;background:rgba(52,211,153,0.07);border-left:2px solid #34d399;border-radius:4px;font-size:10.5px;line-height:1.55;color:#bbf7d0">✅ Bin floor reached — high so far ${highSoFar.toFixed(1)}° already settles ${callLo}°+. Headroom before it climbs <i>out the top</i> of ${callLo}-${callLo + 1}°: <b>${head.toFixed(1)}°</b>.${
+      stillWarming
+        ? ` Still warming ${rate.toFixed(1)}°/hr with ${hrsLeft}h to peak (~${(rate * hrsLeft).toFixed(1)}° more at this rate) — watch the overshoot.`
+        : ` Warming has flattened — overshoot risk low.`}</div>`;
+  } else {
+    const gapNow = needT - currentF;
+    const reqRate = hrsLeft > 0 ? gapNow / hrsLeft : null;
+    let verdict;
+    if (hrsLeft <= 0) {
+      verdict = `It's past the typical peak (${pkHr >= 0 ? fmtHour(pkHr) : "—"}) — reaching it now needs an unusual late push.`;
+    } else if (rate == null) {
+      verdict = `That's <b>~${reqRate.toFixed(1)}°/hr</b> sustained into the ${fmtHour(pkHr)} peak. Warming-rate read needs ~20 more min of obs.`;
+    } else if (rate <= 0.05) {
+      verdict = `Needs <b>~${reqRate.toFixed(1)}°/hr</b>, but it's currently ${rate < -0.2 ? "cooling" : "flat"} (${rate.toFixed(1)}°/hr) — moving the wrong way; needs a reversal.`;
+    } else {
+      const projGain = rate * hrsLeft;
+      const eta = new Date(Date.now() + (gapNow / rate) * 3600000).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+      verdict = rate >= reqRate
+        ? `Needs <b>~${reqRate.toFixed(1)}°/hr</b>; it's warming <b>${rate.toFixed(1)}°/hr</b> — ahead of pace, on track to touch it ~<b>${eta}</b>.`
+        : `Needs <b>~${reqRate.toFixed(1)}°/hr</b>; it's warming <b>${rate.toFixed(1)}°/hr</b> — behind pace, projects ~${Math.max(0, gapNow - projGain).toFixed(1)}° short by the peak.`;
+    }
+    pathBlock = `<div style="margin-top:9px;padding:7px 9px;background:rgba(96,165,250,0.07);border-left:2px solid #60a5fa;border-radius:4px;font-size:10.5px;line-height:1.55;color:#bfdbfe">🎯 Needs <b>+${gapNow.toFixed(1)}°</b> from now (${currentF.toFixed(1)}° → ${needT.toFixed(1)}°) to settle <b>${callLo}°</b> and enter your ${callLo}-${callLo + 1}° bin. ${verdict}</div>`;
+  }
+
   // observed minus forecast, hour by hour
   const fcstByHour = {};
   (day.hourly || []).forEach(h => { fcstByHour[h.hour] = h.temp; });
@@ -2636,7 +2685,7 @@ function renderDrift() {
     if (fcstByHour[hr] != null) deltas.push({ hour: hr, delta: obsByHour[k].tempF - fcstByHour[hr] });
   });
   if (deltas.length < 2) {
-    bodyEl.innerHTML = `<div style="font-size:11px;color:#94a2b4;line-height:1.5">Gathering readings — the drift call needs a couple of hours of live data to compare against the forecast.</div>`;
+    bodyEl.innerHTML = pathBlock + `<div style="font-size:11px;color:#94a2b4;line-height:1.5;margin-top:8px">Gathering readings — the drift-vs-forecast call needs a couple of hours of live data.</div>`;
     setStatus("warming up"); return;
   }
 
@@ -2679,6 +2728,7 @@ function renderDrift() {
         <div style="font-size:11px;line-height:1.5;color:#cdd9e8;margin-top:3px">${sub}</div>
       </div>
     </div>
+    ${pathBlock}
     <div style="font-size:9px;color:#7e8ea4;margin-top:10px;line-height:1.4">vs locked call ${origBin}° · ${deltas.length}h of obs · assumes the current bias holds — won't see a frontal flip coming.</div>
   `;
 }
