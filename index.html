@@ -4252,7 +4252,7 @@ function addMapLegend() {
   MAP.legend.onAdd = () => {
     const d = L.DomUtil.create("div");
     d.style.cssText = "background:rgba(10,18,38,.88);border:1px solid #2a3a5f;border-radius:6px;padding:4px 8px;font-size:9px;color:#cdd6e4;line-height:1.7";
-    d.innerHTML = '<span style="color:#ef4444;font-size:11px">●</span> KSEA<br><span style="color:#34d399;font-size:11px">●</span> Official ASOS<br><span style="color:#fcd34d;font-size:11px">●</span> Personal / PWS';
+    d.innerHTML = '<span style="color:#ef4444;font-size:11px">●</span> KSEA<br><span style="color:#34d399;font-size:11px">●</span> Official ASOS<br><span style="color:#fcd34d;font-size:11px">●</span> Personal / PWS<br>📷 Sky cam (tap for view)';
     return d;
   };
   MAP.legend.addTo(MAP.map);
@@ -4266,13 +4266,13 @@ function addMapLegend() {
 const SKYCAM_KEY = "ksea_skycams_v1";
 const SKYCAM_DEFAULTS = [
   { label: "Elliott Bay waterfront", url: "https://www.seattle.gov/trafficcams/images/Elliott_Broad.jpg",
-    tells: "marine air over the Sound \u2014 a deck here is push fuel" },
+    tells: "marine air over the Sound \u2014 a deck here is push fuel", lat: 47.61547, lon: -122.35417 },
   { label: "SR-99 \u00b7 W Marginal (Duwamish)", url: "https://images.wsdot.wa.gov/nw/099vc02671.jpg",
-    tells: "south Seattle sky, ~8 mi N of KSEA" },
+    tells: "south Seattle sky, ~8 mi N of KSEA", lat: 47.5365, lon: -122.33367 },
   { label: "Airport Way S (Georgetown)", url: "https://www.seattle.gov/trafficcams/images/Airport_Norfolk.jpg",
-    tells: "Boeing Field corridor" },
+    tells: "Boeing Field corridor", lat: 47.51369, lon: -122.28819 },
   { label: "I-5 @ NE 45th (U-District)", url: "https://images.wsdot.wa.gov/nw/005vc16939.jpg",
-    tells: "north reference \u2014 clears last on push days" },
+    tells: "north reference \u2014 clears last on push days", lat: 47.66133, lon: -122.32215 },
 ];
 function loadSkycams() {
   try { const c = JSON.parse(localStorage.getItem(SKYCAM_KEY) || "null"); if (Array.isArray(c)) return c; } catch (e) {}
@@ -4283,8 +4283,12 @@ function addSkycam() {
   const url = prompt("Camera image URL (long-press a cam image \u2192 Copy image address):");
   if (!url || !/^https:\/\//.test(url.trim())) { if (url) alert("Needs an https:// image URL"); return; }
   const label = prompt("Label for this camera:", "My cam") || "My cam";
-  const a = loadSkycams(); a.push({ label, url: url.trim(), tells: "", custom: true });
-  saveSkycams(a); renderSkycams(true);
+  const ll = prompt("Coordinates lat,lon (optional \u2014 pins it on the radar map):", "") || "";
+  const mm = ll.match(/(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)/);
+  const entry = { label, url: url.trim(), tells: "", custom: true };
+  if (mm) { entry.lat = parseFloat(mm[1]); entry.lon = parseFloat(mm[2]); }
+  const a = loadSkycams(); a.push(entry);
+  saveSkycams(a); renderSkycams(true); try { renderStationDots(); } catch (e) {}
 }
 function removeSkycam(i) {
   const a = loadSkycams(); a.splice(i, 1); saveSkycams(a); renderSkycams(true);
@@ -4316,7 +4320,9 @@ function renderSkycams(force) {
   });
   h += `</div>
   <div style="margin-top:8px;font-size:9px;color:#7e8ea4;line-height:1.5">Read the wall coast\u2192north: gray water + clear inland = push incoming; all clear = sunshine wins. Images refresh ~every 3 min; tap to open full size.
-  <a href="#" onclick="addSkycam();return false" style="color:#60a5fa">\u2795 add camera</a> \u2014 find more at wsdot.com travel map or seattle.gov/trafficcams (long-press image \u2192 copy image address).</div>`;
+  <a href="#" onclick="addSkycam();return false" style="color:#60a5fa">\u2795 add camera</a> \u2014 long-press any cam image on these pages \u2192 Copy image address \u2192 paste here:<br>
+  <span style="color:#5d6c81">coast:</span> <a href="https://wsdot.com/travel/real-time/cameras/road/101/Aberdeen/Forks" target="_blank" style="color:#60a5fa">US-101 N of Aberdeen</a> \u00b7 <a href="https://wsdot.com/travel/real-time/cameras/road/101/Aberdeen/Port%20Angeles" target="_blank" style="color:#60a5fa">101 Aberdeen\u2192PA</a> \u00b7 <a href="https://portofshelton.com/port-of-shelton-runway-camera/" target="_blank" style="color:#60a5fa">Shelton runway cam</a><br>
+  <span style="color:#5d6c81">airport sky cams:</span> <a href="https://wsdot.wa.gov/travel/aviation/airports-list/renton-municipal" target="_blank" style="color:#60a5fa">Renton</a> \u00b7 <a href="https://wsdot.wa.gov/travel/aviation/airports-list/boeing-fieldking-co-international" target="_blank" style="color:#60a5fa">Boeing Field</a> \u00b7 <a href="https://wsdot.wa.gov/travel/aviation/airports-list/bremerton-national" target="_blank" style="color:#60a5fa">Bremerton</a> \u00b7 <a href="https://wsdot.wa.gov/travel/aviation/airports-list/pierce-county-thun-field" target="_blank" style="color:#60a5fa">Thun Field</a> \u00b7 <a href="https://wsdot.wa.gov/travel/aviation/airports-list/olympia-regional" target="_blank" style="color:#60a5fa">Olympia</a></div>`;
   body.innerHTML = h;
   if (statusEl) { statusEl.textContent = `${all.length} cams`; statusEl.style.color = "#34d399"; }
 }
@@ -4343,6 +4349,17 @@ function renderStationDots() {
       fillColor: isK ? "#ef4444" : "#34d399", fillOpacity: 0.95
     }).addTo(MAP.stnDots)
       .bindPopup(`<b>${id}</b> ${name}<br>${tempF != null ? tempF.toFixed(1) + "°F" : "no data"}${fmtAge(time)}`);
+  });
+
+  // camera pins: tap for a live snapshot right in the popup
+  const cams = SKYCAM_DEFAULTS.concat(loadSkycams());
+  cams.forEach(c => {
+    if (c.lat == null || c.lon == null) return;
+    const icon = L.divIcon({ className: "", html: '<div style="font-size:15px;text-shadow:0 0 3px #000">\ud83d\udcf7</div>', iconSize: [18, 18], iconAnchor: [9, 9] });
+    const stamp = Math.floor(Date.now() / 180000);
+    const src = c.url + (c.url.includes("?") ? "&" : "?") + "t=" + stamp;
+    L.marker([c.lat, c.lon], { icon }).addTo(MAP.stnDots)
+      .bindPopup(`<b>\ud83d\udcf7 ${c.label}</b><br><a href="${c.url}" target="_blank" rel="noopener"><img src="${src}" style="width:210px;border-radius:4px;margin-top:4px"></a>${c.tells ? `<br><span style="font-size:10px;color:#555">${c.tells}</span>` : ""}`, { maxWidth: 230 });
   });
 
   const pws = (state.synoptic && state.synoptic.stations) || [];
