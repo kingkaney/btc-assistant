@@ -182,22 +182,10 @@
   <div class="panel-body" id="drift-body"></div>
 </div>
 
-<!-- KALSHI EDGE + KELLY SIZING (manual price entry — Kalshi API blocks browsers) -->
-<div class="panel" id="edge-panel">
-  <div class="panel-head"><span>💰 Edge &amp; Size</span><span class="accent" id="edge-status">—</span></div>
-  <div class="panel-body" id="edge-body"></div>
-</div>
-
 <!-- OFFICIAL SETTLE + SCORECARD (NWS CLI auto-pull) -->
 <div class="panel" id="score-panel">
   <div class="panel-head"><span>🏛 Official Settle · Scorecard</span><span class="accent" id="score-status">—</span></div>
   <div class="panel-body" id="score-body"><div style="font-size:11px;color:#94a2b4">fetching official climate reports…</div></div>
-</div>
-
-<!-- 1-MINUTE BLIP RISK (NCEI one-minute archive via IEM) -->
-<div class="panel" id="blip-panel">
-  <div class="panel-head"><span>🔬 1-Min Blip Risk</span><span class="accent" id="blip-status">—</span></div>
-  <div class="panel-body" id="blip-body"><div style="font-size:11px;color:#94a2b4">fetching one-minute archive…</div></div>
 </div>
 
 <!-- LIVE 1-MIN FEED (MADIS-ready; sleeps until a relay URL is configured) -->
@@ -384,6 +372,18 @@
 
     <div id="alert-history" style="margin-top:8px;font-size:10px;color:#94a2b4;max-height:80px;overflow-y:auto"></div>
   </div>
+</div>
+
+<!-- KALSHI EDGE + KELLY SIZING (manual price entry — Kalshi API blocks browsers) -->
+<div class="panel" id="edge-panel">
+  <div class="panel-head"><span>💰 Edge &amp; Size</span><span class="accent" id="edge-status">—</span></div>
+  <div class="panel-body" id="edge-body"></div>
+</div>
+
+<!-- 1-MINUTE BLIP RISK (NCEI one-minute archive via IEM) -->
+<div class="panel" id="blip-panel">
+  <div class="panel-head"><span>🔬 1-Min Blip Risk</span><span class="accent" id="blip-status">—</span></div>
+  <div class="panel-body" id="blip-body"><div style="font-size:11px;color:#94a2b4">fetching one-minute archive…</div></div>
 </div>
 
 <div class="footer">
@@ -3802,11 +3802,11 @@ const PANELS_KEY = "ksea_panels_v1";
   // collapsed on first run (until the user opens them once):
   const DEFAULT_COLLAPSED = new Set([
     "edge-panel", "score-panel", "blip-panel", "live1m-panel", "conditions-panel",
-    "leads-panel", "panel-9", "calib-panel", "map-panel",
+    "leads-panel", "panel-7", "calib-panel", "map-panel",
   ]);
   document.querySelectorAll(".panel").forEach((p, i) => {
     const head = p.querySelector(".panel-head");
-    if (!head || head.dataset.coll) return;
+    if (!head || head.dataset.coll || head.hasAttribute("onclick")) return;  // skip panels with their own toggle
     head.dataset.coll = "1";
     const id = p.id || ("panel-" + i);
     const chev = document.createElement("span");
