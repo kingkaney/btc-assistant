@@ -182,6 +182,12 @@
   <div class="panel-body" id="drift-body"></div>
 </div>
 
+<!-- NETWORK NOWCAST: neighbor-consensus estimate of KSEA's precise temp, self-graded -->
+<div class="panel" id="nowcast-panel">
+  <div class="panel-head"><span>🧮 Network Nowcast</span><span class="accent" id="nowcast-status">—</span></div>
+  <div class="panel-body" id="nowcast-body"></div>
+</div>
+
 <!-- OFFICIAL SETTLE + SCORECARD (NWS CLI auto-pull) -->
 <div class="panel" id="score-panel">
   <div class="panel-head"><span>🏛 Official Settle · Scorecard</span><span class="accent" id="score-status">—</span></div>
@@ -216,6 +222,7 @@
   <div class="panel-body">
     <div id="leads-summary" style="font-size:11px;color:#aab6c6;margin-bottom:10px;line-height:1.5">checking nearby stations…</div>
     <div id="leads-grid" style="display:grid;grid-template-columns:54px 70px 1fr 64px;gap:6px 8px;font-size:11px;align-items:center"></div>
+      <div id="leads-lag"></div>
     <div style="font-size:9px;color:#9ca3af;margin-top:8px;line-height:1.5">If a nearby ASOS is fresher and divergent, KSEA's next update will likely move toward it. South wind warms KSEA first; north wind warms KBFI first.</div>
 
     <!-- Synoptic close-in mesonet network -->
@@ -2053,7 +2060,7 @@ async function fetchSixHour(force) {
       }
       if (t && p.timestamp) cache.tgroups[p.timestamp] = t;
     });
-    const cut = new Date(now - 3 * 86400 * 1000).toISOString();
+    const cut = new Date(now - 21 * 86400 * 1000).toISOString();
     Object.keys(cache.entries).forEach(k => { if (k < cut) delete cache.entries[k]; });
     Object.keys(cache.tgroups).forEach(k => { if (k < cut) delete cache.tgroups[k]; });
     cache.error = null;
@@ -2900,6 +2907,7 @@ function renderAll() {
   renderNearbyStations();
   renderSynopticStations();
   renderStationDots();
+  renderNowcast();
   renderBuckets();
   renderChart();
   renderCurrent();
@@ -2909,7 +2917,100 @@ function renderAll() {
   renderAccLogStatus();
 }
 
+// =============================================================================
+// LEAD-LAG: does a neighbor (default Renton) move BEFORE KSEA, and by how long?
+// (a) cross-correlates 15-min temperature changes at lags up to ±60 min
+// (b) tracks whole-degree upward crossings: neighbor crosses L, minutes until KSEA does
+// =============================================================================
+function llSeries(sid) {
+  const rows = synLogRead().filter(r => r.sid === sid && r.temp != null && r.kseaTemp != null && (r.ageMin == null || r.ageMin <= 20));
+  rows.sort((a, b) => a.t - b.t);
+  // resample both onto a 5-min grid (nearest row within 6 min)
+  if (rows.length < 2) return [];
+  const out = [];
+  const t0 = rows[0].t, t1 = rows[rows.length - 1].t;
+  let j = 0;
+  for (let t = t0; t <= t1; t += 5 * 60000) {
+    while (j < rows.length - 1 && Math.abs(rows[j + 1].t - t) <= Math.abs(rows[j].t - t)) j++;
+    if (Math.abs(rows[j].t - t) <= 6 * 60000) out.push({ t, s: rows[j].temp, k: rows[j].kseaTemp });
+    else out.push(null);
+  }
+  return out;
+}
+
+function llAnalyze(sid) {
+  const g = llSeries(sid);
+  const n = g.filter(Boolean).length;
+  if (n < 100) return { ready: false, n };
+  // 15-min deltas (3 grid steps)
+  const dS = [], dK = [];
+  for (let i = 3; i < g.length; i++) {
+    if (g[i] && g[i - 3]) { dS.push(g[i].s - g[i - 3].s); dK.push(g[i].k - g[i - 3].k); }
+    else { dS.push(null); dK.push(null); }
+  }
+  const corrAt = lag => {           // lag in grid steps; +lag = neighbor LEADS
+    let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0, m = 0;
+    for (let i = 0; i < dK.length; i++) {
+      const a = dS[i - lag], b = dK[i];
+      if (a == null || b == null) continue;
+      sx += a; sy += b; sxx += a * a; syy += b * b; sxy += a * b; m++;
+    }
+    if (m < 40) return null;
+    const cov = sxy / m - (sx / m) * (sy / m);
+    const sd = Math.sqrt(Math.max(1e-9, (sxx / m - (sx / m) ** 2) * (syy / m - (sy / m) ** 2)));
+    return { r: cov / sd, m };
+  };
+  let best = { lag: 0, r: -2 };
+  for (let lag = 0; lag <= 12; lag++) {           // 0 to +60 min, neighbor-leads side
+    const c = corrAt(lag);
+    if (c && c.r > best.r) best = { lag, r: c.r, m: c.m };
+  }
+  const zero = corrAt(0);
+  // upward whole-degree crossings: neighbor crosses L, when does KSEA?
+  const lags = [], gaps = []; let crossings = 0, followed = 0;
+  for (let i = 1; i < g.length; i++) {
+    if (!g[i] || !g[i - 1]) continue;
+    const L = Math.ceil(g[i - 1].s + 1e-9);
+    if (g[i - 1].s < L && g[i].s >= L) {          // neighbor crossed up through L
+      if (g[i].k >= L) continue;                  // KSEA already there -> not a lead event
+      crossings++;
+      gaps.push(L - g[i].k);
+      for (let j2 = i; j2 < Math.min(g.length, i + 24); j2++) {  // within 2h
+        if (g[j2] && g[j2].k >= L) { followed++; lags.push((j2 - i) * 5); break; }
+      }
+    }
+  }
+  lags.sort((a, b) => a - b); gaps.sort((a, b) => a - b);
+  return {
+    ready: true, n,
+    bestLagMin: best.lag * 5, bestR: best.r, zeroR: zero ? zero.r : null,
+    crossings, followed,
+    medLagMin: lags.length ? lags[Math.floor(lags.length / 2)] : null,
+    medGap: gaps.length ? gaps[Math.floor(gaps.length / 2)] : null,
+  };
+}
+
+function llHtml() {
+  const pick = ["KRNT1M", "KRNT", "KBFI1M", "KBFI"];
+  let sid = null, a = null;
+  for (const c of pick) { const r = llAnalyze(c); if (r.ready) { sid = c; a = r; break; } if (!a || r.n > a.n) { sid = c; a = r; } }
+  if (!a) return "";
+  if (!a.ready) {
+    return `<div style="margin-top:9px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06);font-size:10px;color:#7e8ea4">⏱ Renton→KSEA lag analysis: learning — ${a.n}/100 paired readings logged for ${sid}. Accrues while the app is open.</div>`;
+  }
+  const leads = a.bestLagMin > 0 && a.bestR > (a.zeroR ?? 0) + 0.03;
+  const verdict = leads
+    ? `<b style="color:#a7f3d0">${sid} moves ~${a.bestLagMin} min before KSEA</b> (corr ${a.bestR.toFixed(2)} vs ${ (a.zeroR ?? 0).toFixed(2)} simultaneous)`
+    : `<b style="color:#eef3fa">${sid} and KSEA move near-simultaneously</b> (no lead beats lag-0 corr ${(a.zeroR ?? 0).toFixed(2)})`;
+  const cross = a.crossings >= 5
+    ? ` · When ${sid} crosses a whole degree first, KSEA follows <b>${a.followed}/${a.crossings}</b> times, median <b>${a.medLagMin} min</b> later (KSEA typically ${a.medGap != null ? a.medGap.toFixed(1) : "?"}° behind at the moment of crossing).`
+    : ` · Crossing events so far: ${a.crossings} — need ~5+ warm-up days for the follow-rate stat.`;
+  return `<div style="margin-top:9px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06);font-size:10px;color:#94a2b4;line-height:1.55">⏱ ${verdict}${cross} <span style="color:#5d6c81">n=${a.n} paired readings</span></div>`;
+}
+
 function renderNearbyStations() {
+  const lagEl = document.getElementById("leads-lag");
+  if (lagEl) { try { lagEl.innerHTML = llHtml(); } catch (e) {} }
   const grid  = document.getElementById("leads-grid");
   const sigEl = document.getElementById("leads-signal");
   const sumEl = document.getElementById("leads-summary");
@@ -3339,6 +3440,148 @@ function logCalibrationObs() {
   if (log.length > CAL_LOG_MAX) log.splice(0, log.length - CAL_LOG_MAX);
   calLogWrite(log);
   renderCalLogStatus();
+}
+
+// =============================================================================
+// NETWORK NOWCAST — learn each neighbor's offset to KSEA by hour-block, then
+// vote a consensus estimate of KSEA's precise temp between hourly METAR prints.
+// Self-grades against every new T-group so the trust level is measured, not vibes.
+// =============================================================================
+const NOWCAST_KEY = "ksea_nowcast_v1";
+const NOWCAST_MIN_N = 8;     // paired samples a station needs in a block before voting
+
+function ncBlock(hour) { return Math.floor(((hour == null ? 12 : hour) % 24) / 3); }
+
+// offset sample = kseaTemp - stationTemp  ->  estimate = liveStationTemp + offset
+function ncLearnOffsets() {
+  const rows = synLogRead();
+  const m = {};
+  for (const r of rows) {
+    if (r.temp == null || r.kseaTemp == null || (r.ageMin == null ? 99 : r.ageMin) > 25) continue;
+    const off = r.kseaTemp - r.temp;
+    if (Math.abs(off) > 15) continue;                       // junk guard
+    const b = ncBlock(r.hour);
+    (m[r.sid] = m[r.sid] || {});
+    (m[r.sid][b] = m[r.sid][b] || []).push(off);
+  }
+  const out = {};
+  Object.keys(m).forEach(sid => {
+    out[sid] = {};
+    Object.keys(m[sid]).forEach(b => {
+      const a = m[sid][b].slice(-400).sort((x, y) => x - y);
+      const med = a[Math.floor(a.length / 2)];
+      const mad = a.map(v => Math.abs(v - med)).sort((x, y) => x - y)[Math.floor(a.length / 2)] || 0.5;
+      out[sid][b] = { off: med, mad, n: a.length };
+    });
+  });
+  return out;
+}
+
+function ncPacHour() {
+  try {
+    return parseFloat(new Date().toLocaleString("en-US",
+      { timeZone: TZ, hour12: false, hour: "numeric", minute: "numeric" })
+      .replace(/[^\d.:]/g, "").replace(":", "."));
+  } catch (e) { return new Date().getHours(); }
+}
+
+// Weighted-median consensus from fresh neighbors with learned offsets
+function ncEstimate() {
+  const offsets = ncLearnOffsets();
+  const stns = (state.synoptic && state.synoptic.stations) || [];
+  const now = Date.now();
+  const b = ncBlock(ncPacHour());
+  const votes = [];
+  for (const s of stns) {
+    if (s.tempF == null || !s.time) continue;
+    const age = (now - s.time.getTime()) / 60000;
+    if (age > 25) continue;
+    const ob = offsets[s.id] ? offsets[s.id][b] : null;
+    if (!ob || ob.n < NOWCAST_MIN_N) continue;
+    votes.push({ sid: s.id, est: s.tempF + ob.off, w: 1 / Math.max(0.25, ob.mad),
+                 off: ob.off, mad: ob.mad, n: ob.n, age: Math.round(age) });
+  }
+  if (votes.length < 3) return { ready: false, votes };
+  votes.sort((a, c) => a.est - c.est);
+  const totW = votes.reduce((s, v) => s + v.w, 0);
+  let acc = 0, est = votes[votes.length - 1].est;
+  for (const v of votes) { acc += v.w; if (acc >= totW / 2) { est = v.est; break; } }
+  const spread = votes.map(v => Math.abs(v.est - est)).sort((a, c) => a - c)[Math.floor(votes.length / 2)];
+  return { ready: true, est, band: Math.max(0.3, spread), votes };
+}
+
+// Stash predictions; grade each against the next T-group (truth in tenths)
+function ncSelfGrade(e) {
+  let rec; try { rec = JSON.parse(localStorage.getItem(NOWCAST_KEY) || "{}"); } catch (err) { rec = {}; }
+  rec.preds = rec.preds || []; rec.grades = rec.grades || [];
+  if (e && e.ready) {
+    const last = rec.preds[rec.preds.length - 1];
+    if (!last || Date.now() - last.t > 3 * 60000) {
+      rec.preds.push({ t: Date.now(), est: +e.est.toFixed(2) });
+      if (rec.preds.length > 600) rec.preds.splice(0, rec.preds.length - 600);
+    }
+  }
+  const tg = (loadSixHr().tgroups) || {};
+  const done = new Set(rec.grades.map(g => g.tgts));
+  Object.keys(tg).forEach(k => {
+    if (done.has(k)) return;
+    const ts = Date.parse(k); if (!isFinite(ts)) return;
+    const cands = rec.preds.filter(p => ts - p.t > 2 * 60000 && ts - p.t < 20 * 60000);
+    if (!cands.length) return;
+    const p = cands[cands.length - 1];
+    rec.grades.push({ tgts: k, est: p.est, truth: tg[k].f, err: +(p.est - tg[k].f).toFixed(2) });
+  });
+  if (rec.grades.length > 300) rec.grades.splice(0, rec.grades.length - 300);
+  try { localStorage.setItem(NOWCAST_KEY, JSON.stringify(rec)); } catch (err) {}
+  return rec;
+}
+
+function renderNowcast() {
+  const body = document.getElementById("nowcast-body");
+  const statusEl = document.getElementById("nowcast-status");
+  if (!body) return;
+  const e = ncEstimate();
+  const rec = ncSelfGrade(e);
+  const g = rec.grades || [];
+  const recent = g.slice(-30);
+  const mae = recent.length ? recent.reduce((s, x) => s + Math.abs(x.err), 0) / recent.length : null;
+  const bias = recent.length ? recent.reduce((s, x) => s + x.err, 0) / recent.length : null;
+
+  if (!e.ready) {
+    const learning = e.votes ? e.votes.length : 0;
+    body.innerHTML = `<div style="font-size:11px;color:#94a2b4;line-height:1.6">
+      Learning the network. A station can vote once it has <b>${NOWCAST_MIN_N}+ paired samples</b> in the current 3-hour block; a consensus needs <b>3+ fresh voters</b> (now: ${learning}).
+      Pairs accrue automatically while the app is open — expect useful estimates after ~1–2 weeks of normal use.</div>`;
+    if (statusEl) { statusEl.textContent = "learning"; statusEl.style.color = "#9ca3af"; }
+    return;
+  }
+
+  const sr = settleRead(e.est);
+  const lastOb = state.current && state.current.tempF != null ? state.current : null;
+  const obAge = lastOb && lastOb.time ? Math.max(0, (Date.now() - new Date(lastOb.time).getTime()) / 60000) : null;
+  const upB = Math.floor(e.est) + (e.est % 1 < 0.5 ? 0.5 : 1.5);
+  const dToB = upB - e.est;
+  const nearFlip = Math.abs(dToB) <= e.band;
+
+  let html = `
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+      <div style="font-size:26px;font-weight:700;color:#a7f3d0">${e.est.toFixed(1)}°F</div>
+      <div style="font-size:11px;color:#94a2b4">±${e.band.toFixed(1)}° · ${e.votes.length} stations voting · settles <b style="color:#eef3fa">${sr.ambiguous ? sr.range : sr.settles}°</b></div>
+    </div>
+    <div style="font-size:10px;color:#7e8ea4;margin-top:3px">network estimate of KSEA <i>right now</i>, between METAR prints${lastOb ? ` · last KSEA ob ${lastOb.tempF.toFixed(1)}° (${obAge.toFixed(0)}m ago)` : ""}</div>`;
+  if (nearFlip) {
+    html += `<div style="margin-top:8px;padding:7px 9px;background:rgba(248,113,113,0.08);border-left:2px solid #f87171;border-radius:4px;font-size:10.5px;color:#fecaca">⚡ Estimate is within its error band of the <b>${upB}°</b> rounding line — the next METAR could print either side. Boundary risk is live.</div>`;
+  }
+  html += recent.length
+    ? `<div style="margin-top:9px;font-size:10px;color:#94a2b4">self-graded vs T-groups: <b style="color:#eef3fa">MAE ${mae.toFixed(2)}°</b> · bias ${bias >= 0 ? "+" : ""}${bias.toFixed(2)}° · n=${g.length}${g.length < 10 ? " · ⚠ small sample — trust grows with n" : ""}</div>`
+    : `<div style="margin-top:9px;font-size:10px;color:#94a2b4">no self-grades yet — each hourly T-group will score the estimate made just before it.</div>`;
+  const top = e.votes.slice().sort((a, c) => c.w - a.w).slice(0, 3);
+  html += `<div style="margin-top:7px;font-size:9px;color:#5d6c81">tightest voters: ${top.map(v => `${v.sid} (off ${v.off >= 0 ? "+" : ""}${v.off.toFixed(1)}° ±${v.mad.toFixed(1)}, n=${v.n})`).join(" · ")}</div>`;
+  body.innerHTML = html;
+  if (statusEl) {
+    statusEl.textContent = mae != null ? `±${e.band.toFixed(1)} · MAE ${mae.toFixed(2)}` : `±${e.band.toFixed(1)}`;
+    statusEl.style.color = "#34d399";
+  }
 }
 
 function calLogDownloadCSV() {
