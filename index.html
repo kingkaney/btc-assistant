@@ -1914,7 +1914,7 @@ function binLabel(S) {
 // it with CORS, so the app can pull the official number itself and grade each
 // locked AI call against reality.
 // =============================================================================
-const CLI_KEY = "ksea_cli_v1";
+const CLI_KEY = "ksea_cli_v2";
 function loadCLI() { try { return JSON.parse(localStorage.getItem(CLI_KEY) || "{}"); } catch (e) { return {}; } }
 function saveCLI(o) { try { localStorage.setItem(CLI_KEY, JSON.stringify(o)); } catch (e) {} }
 
@@ -1955,10 +1955,11 @@ async function fetchCLI(force) {
   if (!force && cache.lastFetch && now - cache.lastFetch < 25 * 60 * 1000) { renderScorecard(); return; }
   cache.lastFetch = now; saveCLI(cache);   // stamp first so errors don't cause hammering
   try {
-    const r = await fetch("https://api.weather.gov/products/types/CLI/locations/SEW");
+    const r = await fetch("https://api.weather.gov/products/types/CLI/locations/SEA");
     if (!r.ok) throw new Error("CLI list HTTP " + r.status);
     const j = await r.json();
     const items = (j["@graph"] || []).slice(0, 15);  // newest first; cap client-side
+    if (!items.length) throw new Error("CLI feed returned 0 products");
     cache.products = cache.products || {};
     if (Object.keys(cache.products).length > 80) cache.products = {}; // crude prune
     let fetched = 0;
@@ -3687,7 +3688,7 @@ function addMapLegend() {
   MAP.legend.onAdd = () => {
     const d = L.DomUtil.create("div");
     d.style.cssText = "background:rgba(10,18,38,.88);border:1px solid #2a3a5f;border-radius:6px;padding:4px 8px;font-size:9px;color:#cdd6e4;line-height:1.7";
-    d.innerHTML = '<span style="color:#34d399;font-size:11px">●</span> Official ASOS<br><span style="color:#fcd34d;font-size:11px">●</span> Personal / PWS';
+    d.innerHTML = '<span style="color:#ef4444;font-size:11px">●</span> KSEA<br><span style="color:#34d399;font-size:11px">●</span> Official ASOS<br><span style="color:#fcd34d;font-size:11px">●</span> Personal / PWS';
     return d;
   };
   MAP.legend.addTo(MAP.map);
@@ -3712,7 +3713,7 @@ function renderStationDots() {
     }
     L.circleMarker([la, lo], {
       radius: isK ? 7 : 5, color: isK ? "#ffffff" : "#0d3b2a", weight: isK ? 2 : 1.5,
-      fillColor: "#34d399", fillOpacity: 0.95
+      fillColor: isK ? "#ef4444" : "#34d399", fillOpacity: 0.95
     }).addTo(MAP.stnDots)
       .bindPopup(`<b>${id}</b> ${name}<br>${tempF != null ? tempF.toFixed(1) + "°F" : "no data"}${fmtAge(time)}`);
   });
