@@ -2005,6 +2005,17 @@ function parseSixHrGroup(raw) {
   return { c, f: +(c * 9 / 5 + 32).toFixed(1) };
 }
 
+// Extract the hourly T-group: "Tsttts'ddd" — current temp in tenths °C.
+// This is the channel that leaks the precise number every hour at :53.
+function parseTGroup(raw) {
+  if (!raw) return null;
+  const m = raw.match(/ T([01])(\d{3})[01]\d{3}(?= |$)/);
+  if (!m) return null;
+  const c = (m[1] === "1" ? -1 : 1) * (parseInt(m[2], 10) / 10);
+  if (!(c > -45 && c < 55)) return null;
+  return { c, f: +(c * 9 / 5 + 32).toFixed(1) };
+}
+
 async function fetchSixHour(force) {
   const cache = loadSixHr();
   const now = Date.now();
@@ -2015,13 +2026,21 @@ async function fetchSixHour(force) {
     if (!r.ok) throw new Error("HTTP " + r.status);
     const j = await r.json();
     cache.entries = cache.entries || {};
+    cache.tgroups = cache.tgroups || {};
     (j.features || []).forEach(ft => {
       const p = ft.properties || {};
       const g = parseSixHrGroup(p.rawMessage || "");
       if (g && p.timestamp) cache.entries[p.timestamp] = g;
+      let t = parseTGroup(p.rawMessage || "");
+      if (!t && p.temperature && p.temperature.value != null) {     // API precise °C fallback
+        const c = p.temperature.value;
+        if (c > -45 && c < 55) t = { c: +c.toFixed(1), f: +(c * 9 / 5 + 32).toFixed(1) };
+      }
+      if (t && p.timestamp) cache.tgroups[p.timestamp] = t;
     });
     const cut = new Date(now - 3 * 86400 * 1000).toISOString();
     Object.keys(cache.entries).forEach(k => { if (k < cut) delete cache.entries[k]; });
+    Object.keys(cache.tgroups).forEach(k => { if (k < cut) delete cache.tgroups[k]; });
     cache.error = null;
   } catch (e) {
     cache.error = String((e && e.message) || e);
@@ -2045,12 +2064,35 @@ function sixHrToday() {
   return best;
 }
 
+// Today's running max from hourly T-groups: the precise tenths reconstructed
+// for the whole day, even if the app was closed when the peak printed.
+function tenthsTodayMax() {
+  const tg = (loadSixHr().tgroups) || {};
+  const today = climateDayOfUTC(Date.now());
+  let best = null;
+  Object.keys(tg).forEach(k => {
+    const ms = Date.parse(k);
+    if (!isFinite(ms) || climateDayOfUTC(ms) !== today) return;
+    if (!best || tg[k].f > best.f) best = { t: ms, c: tg[k].c, f: tg[k].f };
+  });
+  return best;
+}
+
+// The single best precise read for today: 6-hr group beats T-group max when both exist
+function preciseTodayBest() {
+  const six = sixHrToday(), tm = tenthsTodayMax();
+  if (six && tm) return six.f >= tm.f ? Object.assign({ src: "6-hr group" }, six) : Object.assign({ src: "hourly T-group" }, tm);
+  if (six) return Object.assign({ src: "6-hr group" }, six);
+  if (tm) return Object.assign({ src: "hourly T-group" }, tm);
+  return null;
+}
+
 // Green resolution line for the ticker's whole-°C ambiguity warning
 function sixHrHintHtml() {
-  const s = sixHrToday();
+  const s = preciseTodayBest();
   if (!s) return "";
   const tStr = new Date(s.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
-  return `<div style="margin-top:6px;padding:7px 9px;background:rgba(52,211,153,0.08);border-left:2px solid #34d399;border-radius:4px;font-size:9px;line-height:1.5;color:#a7f3d0">✓ METAR 6-hr ob (${tStr}) resolves it: precise <b>${s.c.toFixed(1)}°C = ${s.f.toFixed(1)}°F</b> → that window settles <b>${Math.round(s.f)}°</b>.</div>`;
+  return `<div style="margin-top:6px;padding:7px 9px;background:rgba(52,211,153,0.08);border-left:2px solid #34d399;border-radius:4px;font-size:9px;line-height:1.5;color:#a7f3d0">✓ Precise lane (${s.src}, ${tStr}): <b>${s.c.toFixed(1)}°C = ${s.f.toFixed(1)}°F</b> → settle floor <b>${Math.round(s.f)}°</b>.</div>`;
 }
 
 function gradeScore() {
@@ -2135,12 +2177,12 @@ function renderScorecard() {
       This is the precise-rounded number — when the whole-°C feed disagrees, trust this.</div>`;
   }
 
-  // METAR 6-hr precise group: tenths-°C max, lands ~4:53 PM covering 11AM–5PM
-  const six = sixHrToday();
+  // Precise lane: running tenths max (hourly T-groups) + 6-hr group, best of both
+  const six = preciseTodayBest();
   if (six) {
     const tStr = new Date(six.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
     html += `<div style="margin-top:9px;padding:7px 9px;background:rgba(52,211,153,0.08);border-left:2px solid #34d399;border-radius:4px;font-size:10px;line-height:1.5;color:#a7f3d0">
-      📐 METAR 6-hr precise max (${tStr}): <b>${six.c.toFixed(1)}°C = ${six.f.toFixed(1)}°F → settles ${Math.round(six.f)}°</b> for that window. Tenths lane — overrides every whole-°C feed.</div>`;
+      📐 Precise tenths max today (${six.src}, ${tStr}): <b>${six.c.toFixed(1)}°C = ${six.f.toFixed(1)}°F → settle floor ${Math.round(six.f)}°</b>. This is the lane the sharp money reads — it overrides every whole-°C feed.</div>`;
   }
 
   // Recent graded rows
@@ -3807,7 +3849,11 @@ setTimeout(() => fetchBlip(), 4000);      // 1-min archive backfill: after first
 setInterval(() => fetchBlip(), 1_800_000); // …then every 30 min (archive lags days anyway)
 setInterval(() => pollLive1m(), 15_000);
 fetchSixHour();                            // METAR 6-hr precise group: on load…
-setInterval(() => fetchSixHour(), 1_200_000); // …and every 20 min (groups post 4x/day)   // live 1-min feed: poll every 15s (feed mints 1 pt/min; this just catches it fast)
+setInterval(() => fetchSixHour(), 1_200_000); // …baseline every 20 min
+setInterval(() => {                           // burst window: METARs publish ~:53-:00, grab tenths within minutes
+  const m = new Date().getUTCMinutes();
+  if ((m >= 54 || m <= 8) && m % 3 === 0) fetchSixHour(true);
+}, 60_000);   // live 1-min feed: poll every 15s (feed mints 1 pt/min; this just catches it fast)
 setInterval(() => { if (MAP.inited) { loadRadar(); loadWindCloud(); } }, 300_000);
 setInterval(renderStatus, 5000);
 window.addEventListener("resize", () => { renderChart(); if (MAP.map) { try { MAP.map.invalidateSize(); } catch(e){} } });
