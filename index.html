@@ -602,7 +602,7 @@ function saveSynopticToken() {
       if (statusEl) { statusEl.textContent = "Token cleared."; statusEl.style.color = "#9ca3af"; }
     }
   } catch (e) {}
-  fetchSynopticNearby().then(renderSynopticStations).catch(()=>{});
+  fetchSynopticNearby().then(() => { renderSynopticStations(); renderStationDots(); }).catch(()=>{});
 }
 
 async function fetchSynopticNearby() {
@@ -632,13 +632,22 @@ async function fetchSynopticNearby() {
       let distMi = (!isNaN(lat) && !isNaN(lon)) ? haversineMi(LAT, LON, lat, lon)
                  : (s.DISTANCE != null ? parseFloat(s.DISTANCE) : null);
       const dir = (!isNaN(lat) && !isNaN(lon)) ? compass8(bearingDeg(LAT, LON, lat, lon)) : null;
-      return { id: s.STID, name: s.NAME, tempF, dewF, time, distMi, dir };
+      return { id: s.STID, name: s.NAME, tempF, dewF, time, distMi, dir, lat: isNaN(lat) ? null : lat, lon: isNaN(lon) ? null : lon };
     }).filter(s => s.tempF != null && s.id !== "KSEA")
       .sort((a,b) => (a.distMi ?? 999) - (b.distMi ?? 999));
     state.synoptic = { stations: stns, error: null, fetchedAt: Date.now() };
   } catch (e) {
     state.synoptic = { stations: [], error: e.message || String(e), fetchedAt: Date.now() };
   }
+}
+
+// Short, safe place label for a station ("DES MOINES 1.7 SW" -> "Des Moines 1.7 Sw")
+function stnPlace(name, id) {
+  if (!name || name === id) return "";
+  let n = String(name).replace(/[<>&"]/g, "").replace(/\s+/g, " ").trim();
+  n = n.toLowerCase().replace(/\b[a-z]/g, ch => ch.toUpperCase());
+  if (n.length > 18) n = n.slice(0, 17) + "\u2026";
+  return n;
 }
 
 function renderSynopticStations() {
@@ -689,7 +698,7 @@ function renderSynopticStations() {
     const distDir = s.distMi != null ? `${s.distMi.toFixed(1)}mi${s.dir ? " " + s.dir : ""}` : "—";
     html += `
       <div style="color:#eef3fa;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(s.name||"").replace(/"/g,'')}">${s.id || s.name || "—"}</div>
-      <div style="color:#94a2b4;font-variant-numeric:tabular-nums">${distDir}</div>
+      <div style="color:#94a2b4;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${distDir}${stnPlace(s.name, s.id) ? ` <span style=\"color:#5d6c81;font-size:9px\">\u00b7 ${stnPlace(s.name, s.id)}</span>` : ""}</div>
       <div style="text-align:right;color:#eef3fa;font-variant-numeric:tabular-nums">${s.tempF.toFixed(1)}°F <span style="color:${ageColor};font-size:10px">· ${age!=null?age.toFixed(0)+"m":"—"}</span></div>
       <div style="text-align:right;color:${dColor};font-variant-numeric:tabular-nums">${delta==null?"—":(delta>0?"+":"")+delta.toFixed(1)}</div>
     `;
@@ -2866,6 +2875,7 @@ function renderAll() {
   setTimeout(refreshAutoPeeks, 0);
   renderNearbyStations();
   renderSynopticStations();
+  renderStationDots();
   renderBuckets();
   renderChart();
   renderCurrent();
@@ -2921,7 +2931,7 @@ function renderNearbyStations() {
     if (!obs || obs.tempF == null) {
       html += `
         <div style="color:#eef3fa">${s.id}</div>
-        <div style="color:#94a2b4">${s.dist}</div>
+        <div style="color:#94a2b4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.dist} <span style="color:#5d6c81;font-size:9px">\u00b7 ${s.name}</span></div>
         <div style="text-align:right;color:#9ca3af">no data</div>
         <div style="text-align:right;color:#9ca3af">—</div>
       `;
@@ -2945,7 +2955,7 @@ function renderNearbyStations() {
 
     html += `
       <div style="color:#eef3fa;${rowBg}">${s.id}</div>
-      <div style="color:#94a2b4;${rowBg}">${s.dist}</div>
+      <div style="color:#94a2b4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${rowBg}">${s.dist} <span style="color:#5d6c81;font-size:9px">· ${s.name}</span></div>
       <div style="text-align:right;color:#eef3fa;font-variant-numeric:tabular-nums;${rowBg}">
         ${obs.tempF.toFixed(1)}°F <span style="color:${ageColor};font-size:10px">· ${age.toFixed(0)}m</span>
       </div>
@@ -3648,8 +3658,9 @@ function initMap() {
     MAP.base = L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
       maxZoom: 19, attribution: "© OpenStreetMap, © CARTO"
     }).addTo(MAP.map);
-    L.circleMarker([LAT, LON], { radius: 6, color: "#fcd34d", weight: 2, fillColor: "#fbbf24", fillOpacity: 1 })
-      .addTo(MAP.map).bindTooltip("KSEA");
+    MAP.stnDots = L.layerGroup().addTo(MAP.map);
+    addMapLegend();
+    renderStationDots();
     MAP.windGroup = L.layerGroup();
     MAP.cloudGroup = L.layerGroup();
     if (MAP.on.wind) MAP.windGroup.addTo(MAP.map);
@@ -3662,6 +3673,58 @@ function initMap() {
     if (statusEl) statusEl.textContent = "map error";
     console.warn("map init failed:", e);
   }
+}
+
+// Official ASOS coordinates (KSEA + lead-indicator network)
+const OFFICIAL_COORDS = {
+  KSEA: [47.4444, -122.3138], KBFI: [47.5300, -122.3019], KRNT: [47.4931, -122.2147],
+  KTIW: [47.2678, -122.5781], KPWT: [47.4950, -122.7647], KPLU: [47.1039, -122.2869]
+};
+
+function addMapLegend() {
+  if (!MAP.map || MAP.legend || typeof L === "undefined") return;
+  MAP.legend = L.control({ position: "bottomleft" });
+  MAP.legend.onAdd = () => {
+    const d = L.DomUtil.create("div");
+    d.style.cssText = "background:rgba(10,18,38,.88);border:1px solid #2a3a5f;border-radius:6px;padding:4px 8px;font-size:9px;color:#cdd6e4;line-height:1.7";
+    d.innerHTML = '<span style="color:#34d399;font-size:11px">●</span> Official ASOS<br><span style="color:#fcd34d;font-size:11px">●</span> Personal / PWS';
+    return d;
+  };
+  MAP.legend.addTo(MAP.map);
+}
+
+// Green dots = official ASOS, yellow = personal/mesonet; rebuilt on each data refresh
+function renderStationDots() {
+  if (!MAP.map || !MAP.stnDots || typeof L === "undefined") return;
+  MAP.stnDots.clearLayers();
+  const fmtAge = t => { if (!t) return ""; const m = Math.max(0,(Date.now()-new Date(t).getTime())/60000); return ` · ${m.toFixed(0)}m`; };
+
+  Object.keys(OFFICIAL_COORDS).forEach(id => {
+    const [la, lo] = OFFICIAL_COORDS[id];
+    const isK = id === "KSEA";
+    let tempF = null, time = null, name = "";
+    if (isK) { tempF = state.current && state.current.tempF; time = state.current && state.current.time; name = "Seattle-Tacoma Intl"; }
+    else {
+      const o = state.nearbyStations && state.nearbyStations[id];
+      if (o) { tempF = o.tempF; time = o.time; }
+      const meta = (typeof NEARBY_STATIONS !== "undefined") && NEARBY_STATIONS.find(s => s.id === id);
+      if (meta) name = meta.name;
+    }
+    L.circleMarker([la, lo], {
+      radius: isK ? 7 : 5, color: isK ? "#ffffff" : "#0d3b2a", weight: isK ? 2 : 1.5,
+      fillColor: "#34d399", fillOpacity: 0.95
+    }).addTo(MAP.stnDots)
+      .bindPopup(`<b>${id}</b> ${name}<br>${tempF != null ? tempF.toFixed(1) + "°F" : "no data"}${fmtAge(time)}`);
+  });
+
+  const pws = (state.synoptic && state.synoptic.stations) || [];
+  pws.forEach(s => {
+    if (s.lat == null || s.lon == null || s.id === "KSEA") return;
+    L.circleMarker([s.lat, s.lon], {
+      radius: 4, color: "#6b5413", weight: 1, fillColor: "#fcd34d", fillOpacity: 0.9
+    }).addTo(MAP.stnDots)
+      .bindPopup(`<b>${s.id}</b> ${stnPlace(s.name, s.id)}<br>${s.tempF != null ? s.tempF.toFixed(1) + "°F" : "no data"}${fmtAge(s.time)}`);
+  });
 }
 
 async function loadRadar() {
