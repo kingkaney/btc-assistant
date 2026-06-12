@@ -1283,6 +1283,9 @@ function renderProjection() {
           : currentF;
       }
 
+      const bh = bestHighToday(highSoFar);
+      const hsSrc = bh.src;
+      if (bh.f != null && (highSoFar == null || bh.f > highSoFar)) highSoFar = bh.f;
       const hsr = settleRead(highSoFar);
 
       // Position current on a bar from today's low up to projected high
@@ -1322,7 +1325,7 @@ function renderProjection() {
           </div>
           <div style="text-align:right">
             <div style="font-size:14px;color:${gapColor};font-variant-numeric:tabular-nums;font-weight:600">${gapArrow} ${gapTxt}</div>
-            <div style="font-size:9px;color:#94a2b4;margin-top:2px">high so far: <b style="color:#fcd34d">${hsr.ambiguous ? hsr.range : hsr.settles}°</b> <span style="color:#7e8ea4">(${highSoFar.toFixed(1)}°F${hsr.isArtifact ? " = " + hsr.nC + "°C" : " raw"})</span></div>
+            <div style="font-size:9px;color:#94a2b4;margin-top:2px">high so far: <b style="color:#fcd34d">${hsr.ambiguous ? hsr.range : hsr.settles}°</b> <span style="color:#7e8ea4">(${highSoFar.toFixed(1)}°F${hsr.isArtifact ? " = " + hsr.nC + "°C" : ""} · ${hsSrc || "own obs"})</span></div>
           </div>
         </div>
         <div style="position:relative;height:8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.10);border-radius:3px;overflow:hidden">
@@ -1579,6 +1582,8 @@ function computeHitProbability() {
     });
     if (todayObs.length > 0) highSoFar = Math.max(...todayObs.map(r => r.tempF), cur);
   }
+  const bh2 = bestHighToday(highSoFar);
+  if (bh2.f != null && bh2.f > highSoFar) highSoFar = bh2.f;
 
   // Already hit it? Done — 100%.
   if (highSoFar >= projHigh - 0.05) {
@@ -2086,6 +2091,22 @@ function tenthsTodayMax() {
     if (!best || tg[k].f > best.f) best = { t: ms, c: tg[k].c, f: tg[k].f };
   });
   return best;
+}
+
+// Fuse all lanes into the truest high-so-far: own samples vs precise
+// T-group/6-hr max vs today's official CLI. Returns { f, src } (src null = own obs).
+function bestHighToday(sampledHs) {
+  let f = sampledHs, src = null;
+  const p = preciseTodayBest();
+  if (p && (f == null || p.f > f)) { f = p.f; src = p.src; }
+  try {
+    const off = loadCLI().officials || {};
+    const o = off[new Date().toLocaleDateString("en-CA", { timeZone: TZ })];
+    if (o && typeof o.max === "number" && (f == null || o.max > f)) {
+      f = o.max; src = o.final ? "official CLI" : "afternoon CLI";
+    }
+  } catch (e) {}
+  return { f, src };
 }
 
 // The single best precise read for today: 6-hr group beats T-group max when both exist
