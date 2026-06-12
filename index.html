@@ -182,6 +182,12 @@
   <div class="panel-body" id="drift-body"></div>
 </div>
 
+<!-- PACE: today's climb, observed vs required rate, over/under verdict -->
+<div class="panel" id="pace-panel">
+  <div class="panel-head"><span>⏱ Pace</span><span class="accent" id="pace-status">—</span></div>
+  <div class="panel-body" id="pace-body"></div>
+</div>
+
 <!-- NETWORK NOWCAST: neighbor-consensus estimate of KSEA's precise temp, self-graded -->
 <div class="panel" id="nowcast-panel">
   <div class="panel-head"><span>🧮 Network Nowcast</span><span class="accent" id="nowcast-status">—</span></div>
@@ -2745,6 +2751,136 @@ function renderLive1m() {
   bodyEl.innerHTML = html;
 }
 
+// =============================================================================
+// BIAS PERSISTENCE + TIMING ALIGNMENT — fixes the drift panel's overshoot.
+// A 9 AM warm bias does NOT carry 1:1 to the daily high; and warming ahead of
+// the forecast curve is timing, not warmth. We (a) align the curves in time,
+// (b) damp the residual bias by how much a bias at this hour HISTORICALLY
+// survived into the high, fit on ~56 days of GFS-vs-observed data.
+// =============================================================================
+const PERSIST_KEY = "ksea_persist_v1";
+const PERSIST_PRIOR = { 0:.2,1:.2,2:.2,3:.2,4:.2,5:.2,6:.25,7:.25,8:.3,9:.35,10:.45,11:.55,12:.65,13:.75,14:.85,15:.95,16:1,17:1,18:1,19:1,20:1,21:1,22:1,23:1 };
+
+function persistAlpha(h) {
+  let c = null; try { c = JSON.parse(localStorage.getItem(PERSIST_KEY) || "null"); } catch (e) {}
+  const hh = Math.max(0, Math.min(23, Math.round(h)));
+  if (c && c.fit && c.fit[hh] != null) return c.fit[hh];
+  return PERSIST_PRIOR[hh] != null ? PERSIST_PRIOR[hh] : 1;
+}
+function persistMeta() {
+  try { const c = JSON.parse(localStorage.getItem(PERSIST_KEY) || "null"); return c && c.fit ? c : null; } catch (e) { return null; }
+}
+
+// Pure fit: alpha(h) = how much of an hour-h bias survives to the daily high
+function persistFitFrom(days) {
+  const raw = {}, ns = {};
+  for (let h = 6; h <= 17; h++) {
+    let sby = 0, sbb = 0, n = 0;
+    days.forEach(d => {
+      const o = d.obsByH[h], f = d.fcByH[h];
+      if (o == null || f == null || d.fcHigh == null || d.actHigh == null) return;
+      const b = o - f, y = d.actHigh - d.fcHigh;
+      if (Math.abs(b) > 15 || Math.abs(y) > 15) return;
+      sby += b * y; sbb += b * b; n++;
+    });
+    if (n >= 20 && sbb > 1) { raw[h] = Math.min(1.05, Math.max(0, sby / sbb)); ns[h] = n; }
+  }
+  const fit = {};
+  Object.keys(raw).forEach(k => {
+    const h = +k;
+    const v = [raw[h - 1], raw[h], raw[h + 1]].filter(x => x != null);
+    fit[h] = +(v.reduce((s, x) => s + x, 0) / v.length).toFixed(2);
+  });
+  return { fit, ns };
+}
+
+async function fetchPersistFit(force) {
+  if (window.__pfBusy) return; window.__pfBusy = true;
+  try {
+    const c = persistMeta();
+    if (!force && c && c.ts && Date.now() - c.ts < 7 * 86400 * 1000) return;
+    const end = new Date(), start = new Date(Date.now() - 57 * 86400 * 1000);
+    // (1) GFS forecast hourly, as archived by Open-Meteo (short-lead proxy for "that day's forecast")
+    const fcUrl = "https://api.open-meteo.com/v1/forecast?latitude=47.4444&longitude=-122.3138&hourly=temperature_2m&temperature_unit=fahrenheit&timezone=America%2FLos_Angeles&past_days=56&forecast_days=1&models=gfs_seamless";
+    // (2) observed hourly METARs from IEM
+    const oUrl = `https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py?station=SEA&data=tmpf&year1=${start.getFullYear()}&month1=${start.getMonth()+1}&day1=${start.getDate()}&year2=${end.getFullYear()}&month2=${end.getMonth()+1}&day2=${end.getDate()}&tz=America%2FLos_Angeles&format=onlycomma&latlon=no&direct=yes&report_type=3`;
+    // (3) official highs (same feed the blip panel uses)
+    const yrs = new Set([start.getFullYear(), end.getFullYear()]);
+    const [fcR, oR, ...cliRs] = await Promise.all([
+      fetch(fcUrl), fetch(oUrl),
+      ...[...yrs].map(y => fetch(`https://mesonet.agron.iastate.edu/json/cli.py?station=KSEA&year=${y}`))
+    ]);
+    const fcJ = await fcR.json();
+    const oTxt = await oR.text();
+    const highs = {};
+    for (const r of cliRs) {
+      const j = await r.json();
+      (j.results || []).forEach(x => { if (x.valid && typeof x.high === "number") highs[x.valid] = x.high; });
+    }
+    const byDay = {};
+    const times = (fcJ.hourly && fcJ.hourly.time) || [], temps = (fcJ.hourly && fcJ.hourly.temperature_2m) || [];
+    for (let i = 0; i < times.length; i++) {
+      const dte = times[i].slice(0, 10), h = parseInt(times[i].slice(11, 13), 10), t = temps[i];
+      if (t == null) continue;
+      const d = (byDay[dte] = byDay[dte] || { fcByH: {}, obsByH: {}, fcHigh: null, actHigh: highs[dte] != null ? highs[dte] : null });
+      d.fcByH[h] = t;
+      if (h >= 7 && h <= 19 && (d.fcHigh == null || t > d.fcHigh)) d.fcHigh = t;
+    }
+    oTxt.split("\n").forEach(line => {
+      const p = line.split(",");
+      if (p.length < 3 || p[0] === "station") return;
+      const dte = p[1].slice(0, 10), h = parseInt(p[1].slice(11, 13), 10), t = parseFloat(p[2]);
+      if (!isFinite(t) || !byDay[dte]) return;
+      byDay[dte].obsByH[h] = t;
+    });
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+    const days = Object.keys(byDay).filter(d => d !== today && byDay[d].actHigh != null).map(d => byDay[d]);
+    if (days.length >= 25) {
+      const r = persistFitFrom(days);
+      r.nDays = days.length; r.ts = Date.now();
+      try { localStorage.setItem(PERSIST_KEY, JSON.stringify(r)); } catch (e) {}
+      console.log("persistence fit:", r.fit, "days:", days.length);
+    }
+  } catch (e) { console.warn("persist fit failed (prior schedule stays active):", e); }
+  finally { window.__pfBusy = false; }
+}
+
+// Timing-aligned bias: slide the forecast curve ±2h; the shift that best fits
+// the last 4h of obs is RAMP TIMING; the residual at that shift is true bias.
+function alignBias(todayObs, fcstByHour) {
+  const hrs = Object.keys(fcstByHour).map(Number).sort((a, b) => a - b);
+  if (hrs.length < 2) return null;
+  const fcAt = h => {
+    if (h <= hrs[0]) return fcstByHour[hrs[0]];
+    for (let i = 1; i < hrs.length; i++) {
+      if (h <= hrs[i]) {
+        const a = hrs[i - 1], b = hrs[i], f = (h - a) / (b - a);
+        return fcstByHour[a] + (fcstByHour[b] - fcstByHour[a]) * f;
+      }
+    }
+    return fcstByHour[hrs[hrs.length - 1]];
+  };
+  const hourOf = t => {
+    const s = new Date(t).toLocaleString("en-US", { timeZone: TZ, hour12: false, hour: "numeric", minute: "numeric" });
+    const m = s.match(/(\d+):(\d+)/); return m ? (+m[1] % 24) + (+m[2]) / 60 : new Date(t).getHours();
+  };
+  const cut = Date.now() - 4 * 3600 * 1000;
+  const obs = todayObs.filter(r => r.time.getTime() >= cut);
+  if (obs.length < 4) return null;
+  let best = null;
+  for (let s = -2; s <= 2.01; s += 0.5) {
+    let se = 0, n = 0;
+    obs.forEach(r => { const e = r.tempF - fcAt(hourOf(r.time) + s); se += e * e; n++; });
+    const rms = Math.sqrt(se / n);
+    if (!best || rms < best.rms) best = { s, rms };
+  }
+  const cut2 = Date.now() - 2 * 3600 * 1000;
+  const recent2 = obs.filter(r => r.time.getTime() >= cut2);
+  const use = recent2.length >= 2 ? recent2 : obs;
+  const bias = use.reduce((sum, r) => sum + (r.tempF - fcAt(hourOf(r.time) + best.s)), 0) / use.length;
+  return { shiftH: best.s, bias };
+}
+
 function renderDrift() {
   const bodyEl = document.getElementById("drift-body");
   const statusEl = document.getElementById("drift-status");
@@ -2854,7 +2990,12 @@ function renderDrift() {
   let peakHour = -1, peakT = -999;
   (day.hourly || []).forEach(h => { if (h.temp > peakT) { peakT = h.temp; peakHour = h.hour; } });
   const pastPeak = peakHour >= 0 && pacificHour > peakHour && (highSoFar - currentF) > 1;
-  const projHigh = Math.max(highSoFar, median + recentBias);  // persist bias, floor at high-so-far
+  const al = alignBias(todayObs, fcstByHour);
+  const levelBias = al ? al.bias : recentBias;
+  const alpha = persistAlpha(pacificHour);
+  const effBias = levelBias * alpha;
+  const pMeta = persistMeta();
+  const projHigh = Math.max(highSoFar, median + effBias);     // damped, timing-aligned bias
   const adjSettle = settleRead(projHigh).settles;
   const origBin = binLabel(origEst), adjBin = binLabel(adjSettle), biasAbs = Math.abs(recentBias);
 
@@ -2868,15 +3009,15 @@ function renderDrift() {
   } else if (adjBin === origBin) {
     icon = "●"; color = "#34d399"; statusTxt = "on pace";
     headline = `On pace — tracking ${origBin}°`;
-    sub = `Running ${recentBias >= 0 ? "+" : ""}${recentBias.toFixed(1)}° vs forecast. High still tracking your locked <b>${origBin}°</b> call.`;
+    sub = `Raw ${recentBias >= 0 ? "+" : ""}${recentBias.toFixed(1)}° vs forecast → damped to ${effBias >= 0 ? "+" : ""}${effBias.toFixed(1)}° on the high. Still tracking your locked <b>${origBin}°</b> call.`;
   } else if (adjSettle > origEst) {
     icon = "📈"; color = "#fbbf24"; statusTxt = "running warm";
     headline = `Tracking warm → ${adjBin}°`;
-    sub = `Running <b>${biasAbs.toFixed(1)}° warm</b> of forecast. If it holds, the high lands near <b>${adjBin}°</b> — above your ${origBin}° call.`;
+    sub = `Raw <b>+${biasAbs.toFixed(1)}°</b> vs the curve${al && Math.abs(al.shiftH) >= 0.5 ? ` — but the ramp is running ~<b>${Math.abs(al.shiftH).toFixed(1)}h ${al.shiftH > 0 ? "ahead" : "behind"}</b>, so true level bias is ${levelBias >= 0 ? "+" : ""}${levelBias.toFixed(1)}°` : ""}. Historically only <b>${Math.round(alpha * 100)}%</b> of a ${fmtHour(pacificHour)} bias survives to the high${pMeta && pMeta.nDays ? ` (fit, ${pMeta.nDays} days)` : " (prior)"} → <b>${effBias >= 0 ? "+" : ""}${effBias.toFixed(1)}°</b> applied. Projects <b>${adjBin}°</b> — above your ${origBin}° call.`;
   } else {
     icon = "📉"; color = "#60a5fa"; statusTxt = "running cool";
     headline = `Tracking cool → ${adjBin}°`;
-    sub = `Running <b>${biasAbs.toFixed(1)}° cool</b> of forecast. If it holds, the high lands near <b>${adjBin}°</b> — below your ${origBin}° call.`;
+    sub = `Raw <b>−${biasAbs.toFixed(1)}°</b> vs the curve${al && Math.abs(al.shiftH) >= 0.5 ? ` — ramp ~<b>${Math.abs(al.shiftH).toFixed(1)}h ${al.shiftH > 0 ? "ahead" : "behind"}</b>, true level bias ${levelBias >= 0 ? "+" : ""}${levelBias.toFixed(1)}°` : ""}. Historically <b>${Math.round(alpha * 100)}%</b> of a ${fmtHour(pacificHour)} bias survives to the high${pMeta && pMeta.nDays ? ` (fit, ${pMeta.nDays} days)` : " (prior)"} → <b>${effBias >= 0 ? "+" : ""}${effBias.toFixed(1)}°</b> applied. Projects <b>${adjBin}°</b> — below your ${origBin}° call.`;
   }
   setStatus(statusTxt);
   bodyEl.innerHTML = `
@@ -2908,6 +3049,7 @@ function renderAll() {
   renderSynopticStations();
   renderStationDots();
   renderNowcast();
+  renderPace();
   renderBuckets();
   renderChart();
   renderCurrent();
@@ -3574,6 +3716,95 @@ function ncSelfGrade(e) {
 
   try { localStorage.setItem(NOWCAST_KEY, JSON.stringify(rec)); } catch (err) {}
   return rec;
+}
+
+function renderPace() {
+  const body = document.getElementById("pace-body");
+  const statusEl = document.getElementById("pace-status");
+  if (!body) return;
+  const set = (h, s, c) => { body.innerHTML = h; if (statusEl) { statusEl.textContent = s; statusEl.style.color = c || "#9ca3af"; } };
+  const isToday = state.days.length && state.selectedDate === state.days[0].date;
+  if (!isToday || !state.current || state.current.tempF == null) {
+    set('<div style="font-size:11px;color:#94a2b4">Live pace runs on today\u2019s view once a current KSEA reading exists.</div>', "\u2014"); return;
+  }
+  const day = state.days[0];
+  const currentF = state.current.tempF;
+  const todayLocalDate = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  const todayObs = (state.obsHistory || [])
+    .filter(r => r.time.toLocaleDateString("en-CA", { timeZone: TZ }) === todayLocalDate)
+    .sort((a, b) => a.time - b.time);
+  const pacificHour = ncPacHour();
+
+  // climb so far (from today's low)
+  let low = currentF, lowT = null;
+  todayObs.forEach(r => { if (r.tempF < low) { low = r.tempF; lowT = r.time; } });
+  const climbed = currentF - low;
+
+  // observed rate: last 90 min, needs >=30 min of span
+  let rate = null, rateSpan = 0;
+  {
+    const cutoff = Date.now() - 90 * 60000;
+    const ro = todayObs.filter(r => r.time.getTime() >= cutoff);
+    if (ro.length >= 2) {
+      const a = ro[0], b = ro[ro.length - 1];
+      rateSpan = (b.time - a.time) / 60000;
+      if (rateSpan >= 30) rate = (b.tempF - a.tempF) / (rateSpan / 60);
+    }
+  }
+
+  // target bucket (locked call, else projection)
+  const aiCall = getLockedAICall(state.selectedDate);
+  const origEst = (aiCall && aiCall.valid) ? aiCall.predHigh
+    : Math.round((day.proj && day.proj.median != null) ? day.proj.median : currentF);
+  let callLo;
+  {
+    const m = String((aiCall && aiCall.valid && aiCall.callLabel) || "").match(/(\d+)\s*[-\u2013]\s*(\d+)/);
+    callLo = m ? parseInt(m[1], 10) : (origEst % 2 === 0 ? origEst - 1 : origEst);
+  }
+  const label = `${callLo}-${callLo + 1}\u00b0`;
+  const needT = callLo - 0.5, capT = callLo + 1.5;
+
+  // forecast peak hour
+  let pkHr = -1, pkT = -999;
+  (day.hourly || []).forEach(h => { if (h.temp > pkT) { pkT = h.temp; pkHr = h.hour; } });
+  if (pkHr < 0) pkHr = 16;
+  const hrsLeft = Math.max(0, pkHr - pacificHour);
+  const fmtT = d => d ? new Date(d).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }) : "";
+  const needRate = hrsLeft > 0.2 ? (needT - currentF) / hrsLeft : null;
+  const pkLabel = `${pkHr > 12 ? pkHr - 12 : pkHr} ${pkHr >= 12 ? "PM" : "AM"}`;
+
+  let html = `<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:11px;color:#cdd6e4">
+    <div><span style="color:#7e8ea4">climbed today</span><br><b style="font-size:17px;color:#eef3fa">${climbed >= 0 ? "+" : ""}${climbed.toFixed(1)}\u00b0</b><br><span style="font-size:9px;color:#5d6c81">${low.toFixed(1)}\u00b0${lowT ? ` @ ${fmtT(lowT)}` : ""} \u2192 ${currentF.toFixed(1)}\u00b0 now</span></div>
+    <div><span style="color:#7e8ea4">pace (last 90m)</span><br><b style="font-size:17px;color:#eef3fa">${rate != null ? (rate >= 0 ? "+" : "") + rate.toFixed(1) + "\u00b0/hr" : "\u2014"}</b><br><span style="font-size:9px;color:#5d6c81">${rate != null ? `${Math.round(rateSpan)}m of obs` : `need ~${Math.max(5, Math.round(30 - rateSpan))}m more obs`}</span></div>
+    <div><span style="color:#7e8ea4">needed for ${label}</span><br><b style="font-size:17px;color:#eef3fa">${needRate != null ? (needRate >= 0 ? "+" : "") + needRate.toFixed(1) + "\u00b0/hr" : "\u2014"}</b><br><span style="font-size:9px;color:#5d6c81">${(needT - currentF) >= 0 ? "+" : ""}${(needT - currentF).toFixed(1)}\u00b0 by ~${pkLabel}</span></div>
+  </div>`;
+
+  let verdict = "", color = "#9ca3af", stat = "\u2014";
+  if (currentF >= capT) {
+    verdict = `\u2b06 <b>Already past the top of ${label}.</b> Unless this is the peak, the settle lands above your bucket \u2014 upper bins are in play now.`;
+    color = "#f87171"; stat = "OVER";
+  } else if (hrsLeft <= 0.2) {
+    if (currentF >= needT) { verdict = `\u2705 <b>Inside ${label} at the peak hour.</b> The question flips to overshoot: ${ (capT - currentF).toFixed(1)}\u00b0 of headroom before it escapes out the top.`; color = "#34d399"; stat = "IN RANGE"; }
+    else { verdict = `\u23f3 <b>Past the typical peak and ${(needT - currentF).toFixed(1)}\u00b0 short.</b> Making ${label} now needs an unusual late push.`; color = "#fbbf24"; stat = "SHORT"; }
+  } else if (rate == null) {
+    verdict = `Pace verdict arrives once ~30 min of recent observations exist.`;
+    stat = "warming up";
+  } else {
+    const proj = currentF + rate * hrsLeft;
+    if (proj < needT - 0.3) {
+      verdict = `\ud83d\udc22 <b>Too slow for ${label}.</b> At ${rate >= 0 ? "+" : ""}${rate.toFixed(1)}\u00b0/hr the day lands ~<b>${proj.toFixed(1)}\u00b0</b> \u2014 ${(needT - proj).toFixed(1)}\u00b0 short of the floor. Lower bins favored unless the rate picks up.`;
+      color = "#60a5fa"; stat = "TOO SLOW";
+    } else if (proj > capT + 0.3) {
+      verdict = `\ud83d\udd25 <b>Too fast \u2014 overshoot risk.</b> At +${rate.toFixed(1)}\u00b0/hr the day lands ~<b>${proj.toFixed(1)}\u00b0</b>, blowing past ${label}\u2019s ceiling (${capT.toFixed(1)}\u00b0). Upper bins favored if this rate holds.`;
+      color = "#f87171"; stat = "TOO FAST";
+    } else {
+      verdict = `\u2705 <b>On pace for ${label}.</b> Current rate projects ~<b>${proj.toFixed(1)}\u00b0</b> \u2014 inside the bucket. Required ${needRate.toFixed(1)}\u00b0/hr vs running ${rate.toFixed(1)}\u00b0/hr.`;
+      color = "#34d399"; stat = "ON PACE";
+    }
+  }
+  html += `<div style="margin-top:10px;padding:7px 9px;background:rgba(255,255,255,0.04);border-left:2px solid ${color};border-radius:4px;font-size:11px;line-height:1.55;color:#dbe4f0">${verdict}</div>`;
+  html += `<div style="margin-top:6px;font-size:9px;color:#5d6c81">linear extrapolation of the recent rate \u2014 it won't see clouds, wind shifts, or marine pushes coming. Pace, not prophecy.</div>`;
+  set(html, stat, color);
 }
 
 function renderNowcast() {
@@ -4243,7 +4474,8 @@ setInterval(() => fetchSixHour(), 1_200_000); // …baseline every 20 min
 setInterval(() => {                           // burst window: METARs publish ~:53-:00, grab tenths within minutes
   const m = new Date().getUTCMinutes();
   if ((m >= 54 || m <= 8) && m % 3 === 0) fetchSixHour(true);
-}, 60_000);   // live 1-min feed: poll every 15s (feed mints 1 pt/min; this just catches it fast)
+}, 60_000);
+setTimeout(() => { try { fetchPersistFit(); } catch (e) {} }, 5000);  // weekly persistence fit   // live 1-min feed: poll every 15s (feed mints 1 pt/min; this just catches it fast)
 setInterval(() => { if (MAP.inited) { loadRadar(); loadWindCloud(); } }, 300_000);
 setInterval(renderStatus, 5000);
 window.addEventListener("resize", () => { renderChart(); if (MAP.map) { try { MAP.map.invalidateSize(); } catch(e){} } });
