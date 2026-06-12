@@ -3532,6 +3532,46 @@ function ncSelfGrade(e) {
     rec.grades.push({ tgts: k, est: p.est, truth: tg[k].f, err: +(p.est - tg[k].f).toFixed(2) });
   });
   if (rec.grades.length > 300) rec.grades.splice(0, rec.grades.length - 300);
+
+  // --- settlement-machine model: ASOS records the max of a 5-min running mean ---
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  rec.day = rec.day || {};
+  if (rec.day.date !== today) {
+    if (rec.day.date && rec.day.maxSm != null) {            // archive yesterday
+      rec.dayHist = rec.dayHist || {};
+      rec.dayHist[rec.day.date] = { maxSm: rec.day.maxSm, t: rec.day.maxT, n: rec.day.n || 0 };
+      const ks = Object.keys(rec.dayHist).sort();
+      while (ks.length > 30) delete rec.dayHist[ks.shift()];
+    }
+    rec.day = { date: today, maxSm: null, maxT: null, n: 0, first: null, last: null };
+    rec.smNow = null;
+  }
+  if (e && e.ready) {
+    const now = Date.now();
+    const win = rec.preds.filter(p => now - p.t <= 5 * 60000).map(p => p.est);
+    win.push(e.est);
+    const sm = win.reduce((s, v) => s + v, 0) / win.length;  // trailing 5-min mean
+    rec.smNow = +sm.toFixed(2);
+    rec.day.n = (rec.day.n || 0) + 1;
+    rec.day.first = rec.day.first || now;
+    rec.day.last = now;
+    if (rec.day.maxSm == null || sm > rec.day.maxSm) { rec.day.maxSm = +sm.toFixed(2); rec.day.maxT = now; }
+  }
+  // grade archived days against FINAL official settles
+  try {
+    const off = loadCLI().officials || {};
+    rec.dayGrades = rec.dayGrades || {};
+    Object.keys(rec.dayHist || {}).forEach(d => {
+      if (rec.dayGrades[d]) return;
+      const o = off[d];
+      if (o && o.final && typeof o.max === "number" && (rec.dayHist[d].n || 0) >= 20) {
+        rec.dayGrades[d] = { est: rec.dayHist[d].maxSm, official: o.max,
+                             exact: Math.round(rec.dayHist[d].maxSm) === o.max,
+                             err: +(rec.dayHist[d].maxSm - o.max).toFixed(2) };
+      }
+    });
+  } catch (err) {}
+
   try { localStorage.setItem(NOWCAST_KEY, JSON.stringify(rec)); } catch (err) {}
   return rec;
 }
@@ -3575,6 +3615,26 @@ function renderNowcast() {
   html += recent.length
     ? `<div style="margin-top:9px;font-size:10px;color:#94a2b4">self-graded vs T-groups: <b style="color:#eef3fa">MAE ${mae.toFixed(2)}°</b> · bias ${bias >= 0 ? "+" : ""}${bias.toFixed(2)}° · n=${g.length}${g.length < 10 ? " · ⚠ small sample — trust grows with n" : ""}</div>`
     : `<div style="margin-top:9px;font-size:10px;color:#94a2b4">no self-grades yet — each hourly T-group will score the estimate made just before it.</div>`;
+  // settlement-machine block: what number is the instrument accumulating today
+  if (rec.smNow != null && rec.day && rec.day.maxSm != null) {
+    const tStr = rec.day.maxT ? new Date(rec.day.maxT).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }) : "";
+    const fStr = rec.day.first ? new Date(rec.day.first).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }) : "";
+    const lStr = rec.day.last ? new Date(rec.day.last).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }) : "";
+    const machSettle = Math.round(rec.day.maxSm);
+    const bhM = bestHighToday(null);
+    const printFloor = bhM.f != null ? Math.round(bhM.f) : null;
+    html += `<div style="margin-top:9px;padding:7px 9px;background:rgba(167,139,250,0.07);border-left:2px solid #a78bfa;border-radius:4px;font-size:10.5px;line-height:1.55;color:#ddd6fe">⚙ <b>Settlement machine (network):</b> smoothed now ${rec.smNow.toFixed(1)}° · est. machine max today <b>${rec.day.maxSm.toFixed(1)}°</b> @ ${tStr} → would settle <b>${machSettle}°</b><span style="color:#8b7fc7"> · tracked ${fStr}–${lStr}, n=${rec.day.n}</span></div>`;
+    if (printFloor != null && machSettle > printFloor) {
+      html += `<div style="margin-top:6px;padding:6px 9px;background:rgba(251,191,36,0.08);border-left:2px solid #fbbf24;border-radius:4px;font-size:10px;color:#fde68a">⚠ Network's machine max settles <b>${machSettle}°</b> but no print shows past <b>${printFloor}°</b> yet — invisible-high conditions may be live. Watch the next T-group.</div>`;
+    }
+    const dg = rec.dayGrades || {};
+    const dk = Object.keys(dg);
+    if (dk.length) {
+      const exact = dk.filter(d => dg[d].exact).length;
+      const dmae = dk.reduce((s, d) => s + Math.abs(dg[d].err), 0) / dk.length;
+      html += `<div style="margin-top:6px;font-size:9.5px;color:#94a2b4">machine-model track record: <b style="color:#eef3fa">${exact}/${dk.length} exact settles</b> · day-max MAE ${dmae.toFixed(2)}°${dk.length < 5 ? " · ⚠ tiny sample" : ""}</div>`;
+    }
+  }
   const top = e.votes.slice().sort((a, c) => c.w - a.w).slice(0, 3);
   html += `<div style="margin-top:7px;font-size:9px;color:#5d6c81">tightest voters: ${top.map(v => `${v.sid} (off ${v.off >= 0 ? "+" : ""}${v.off.toFixed(1)}° ±${v.mad.toFixed(1)}, n=${v.n})`).join(" · ")}</div>`;
   body.innerHTML = html;
