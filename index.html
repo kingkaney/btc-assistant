@@ -1324,7 +1324,7 @@ function renderProjection() {
           <span>${median.toFixed(2)}°F proj high</span>
         </div>
         ${hsr.ambiguous
-          ? `<div style="margin-top:8px;padding:7px 9px;background:rgba(248,113,113,0.10);border-left:2px solid #f87171;border-radius:4px;font-size:9px;line-height:1.5;color:#fca5a5">⚠ Whole-°C reading: this is <b>${hsr.nC}°C</b>, not a precise temp. The official CLI rounds the hidden <i>tenths</i>, which settle <b>${hsr.range}°</b> — can't tell which from this feed. The naive round (${hsr.settles}°) is just one end. Cross-check the NWS 6-hour ob or CLISEA for the real number.</div>`
+          ? `<div style="margin-top:8px;padding:7px 9px;background:rgba(248,113,113,0.10);border-left:2px solid #f87171;border-radius:4px;font-size:9px;line-height:1.5;color:#fca5a5">⚠ Whole-°C reading: this is <b>${hsr.nC}°C</b>, not a precise temp. The official CLI rounds the hidden <i>tenths</i>, which settle <b>${hsr.range}°</b> — can't tell which from this feed. The naive round (${hsr.settles}°) is just one end. Cross-check the NWS 6-hour ob or CLISEA for the real number.</div>${sixHrHintHtml()}`
           : hsr.gap
             ? `<div style="margin-top:8px;padding:7px 9px;background:rgba(248,113,113,0.10);border-left:2px solid #f87171;border-radius:4px;font-size:9px;line-height:1.45;color:#fca5a5">⚠ Rounding gap: whole-°C feeds (and the obs text list) read <b>${hsr.wholeCF}°</b>, but the precise reading settles <b>${hsr.settles}°</b> on the official CLI — trust ${hsr.settles}°.</div>`
             : ""}
@@ -1984,6 +1984,75 @@ async function fetchCLI(force) {
 }
 
 // Match locked calls against final officials.
+// =============================================================================
+// METAR 6-hour max group (the "1-group"): the precise tenths-°C max, reported
+// at synoptic hours. The ~4:53 PM PDT ob covers 11AM–5PM — almost always the
+// daily high — and resolves the whole-°C ambiguity hours before CLISEA.
+// =============================================================================
+const SIXHR_KEY = "ksea_sixhr_v1";
+function loadSixHr() { try { return JSON.parse(localStorage.getItem(SIXHR_KEY) || "{}"); } catch (e) { return {}; } }
+function saveSixHr(o) { try { localStorage.setItem(SIXHR_KEY, JSON.stringify(o)); } catch (e) {} }
+
+// Extract the 6-hr max from a raw METAR: " 1sTTT " in the remarks (s: 0=+,1=−)
+function parseSixHrGroup(raw) {
+  if (!raw) return null;
+  const ri = raw.indexOf("RMK");
+  if (ri < 0) return null;
+  const m = raw.slice(ri).match(/ 1([01])(\d{3})(?= |$)/);
+  if (!m) return null;
+  const c = (m[1] === "1" ? -1 : 1) * (parseInt(m[2], 10) / 10);
+  if (!(c > -45 && c < 55)) return null;
+  return { c, f: +(c * 9 / 5 + 32).toFixed(1) };
+}
+
+async function fetchSixHour(force) {
+  const cache = loadSixHr();
+  const now = Date.now();
+  if (!force && cache.lastFetch && now - cache.lastFetch < 18 * 60 * 1000) { return; }
+  cache.lastFetch = now; saveSixHr(cache);
+  try {
+    const r = await fetch("https://api.weather.gov/stations/KSEA/observations?limit=40");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    cache.entries = cache.entries || {};
+    (j.features || []).forEach(ft => {
+      const p = ft.properties || {};
+      const g = parseSixHrGroup(p.rawMessage || "");
+      if (g && p.timestamp) cache.entries[p.timestamp] = g;
+    });
+    const cut = new Date(now - 3 * 86400 * 1000).toISOString();
+    Object.keys(cache.entries).forEach(k => { if (k < cut) delete cache.entries[k]; });
+    cache.error = null;
+  } catch (e) {
+    cache.error = String((e && e.message) || e);
+  }
+  saveSixHr(cache);
+  renderScorecard();
+  if (typeof renderProjection === "function") try { renderProjection(); } catch (e) {}
+  refreshAutoPeeks();
+}
+
+// Today's best 6-hr precise max (current climate day), or null
+function sixHrToday() {
+  const entries = (loadSixHr().entries) || {};
+  const today = climateDayOfUTC(Date.now());
+  let best = null;
+  Object.keys(entries).forEach(k => {
+    const ms = Date.parse(k);
+    if (!isFinite(ms) || climateDayOfUTC(ms) !== today) return;
+    if (!best || entries[k].f > best.f) best = { t: ms, c: entries[k].c, f: entries[k].f };
+  });
+  return best;
+}
+
+// Green resolution line for the ticker's whole-°C ambiguity warning
+function sixHrHintHtml() {
+  const s = sixHrToday();
+  if (!s) return "";
+  const tStr = new Date(s.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+  return `<div style="margin-top:6px;padding:7px 9px;background:rgba(52,211,153,0.08);border-left:2px solid #34d399;border-radius:4px;font-size:9px;line-height:1.5;color:#a7f3d0">✓ METAR 6-hr ob (${tStr}) resolves it: precise <b>${s.c.toFixed(1)}°C = ${s.f.toFixed(1)}°F</b> → that window settles <b>${Math.round(s.f)}°</b>.</div>`;
+}
+
 function gradeScore() {
   const off = (loadCLI().officials) || {};
   const calls = loadAICalls();
@@ -2064,6 +2133,14 @@ function renderScorecard() {
     html += `<div style="margin-top:9px;padding:7px 9px;background:rgba(251,191,36,0.08);border-left:2px solid #fbbf24;border-radius:4px;font-size:10px;line-height:1.5;color:#fde68a">
       🏛 Official max <b>so far today</b> (afternoon CLI): <b>${interToday.max}°</b>${interToday.maxTime ? " @ " + interToday.maxTime : ""}.
       This is the precise-rounded number — when the whole-°C feed disagrees, trust this.</div>`;
+  }
+
+  // METAR 6-hr precise group: tenths-°C max, lands ~4:53 PM covering 11AM–5PM
+  const six = sixHrToday();
+  if (six) {
+    const tStr = new Date(six.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+    html += `<div style="margin-top:9px;padding:7px 9px;background:rgba(52,211,153,0.08);border-left:2px solid #34d399;border-radius:4px;font-size:10px;line-height:1.5;color:#a7f3d0">
+      📐 METAR 6-hr precise max (${tStr}): <b>${six.c.toFixed(1)}°C = ${six.f.toFixed(1)}°F → settles ${Math.round(six.f)}°</b> for that window. Tenths lane — overrides every whole-°C feed.</div>`;
   }
 
   // Recent graded rows
@@ -3719,6 +3796,7 @@ document.addEventListener("visibilitychange", () => {
     pollLive1m(true);
     fetchCLI();
     fetchBlip();
+    fetchSixHour();
   }
 });
 refresh();
@@ -3727,7 +3805,9 @@ fetchCLI();                       // official climate reports: on load…
 setInterval(() => fetchCLI(), 1_800_000); // …and every 30 min (CLI only updates ~2×/day)
 setTimeout(() => fetchBlip(), 4000);      // 1-min archive backfill: after first paint…
 setInterval(() => fetchBlip(), 1_800_000); // …then every 30 min (archive lags days anyway)
-setInterval(() => pollLive1m(), 15_000);   // live 1-min feed: poll every 15s (feed mints 1 pt/min; this just catches it fast)
+setInterval(() => pollLive1m(), 15_000);
+fetchSixHour();                            // METAR 6-hr precise group: on load…
+setInterval(() => fetchSixHour(), 1_200_000); // …and every 20 min (groups post 4x/day)   // live 1-min feed: poll every 15s (feed mints 1 pt/min; this just catches it fast)
 setInterval(() => { if (MAP.inited) { loadRadar(); loadWindCloud(); } }, 300_000);
 setInterval(renderStatus, 5000);
 window.addEventListener("resize", () => { renderChart(); if (MAP.map) { try { MAP.map.invalidateSize(); } catch(e){} } });
