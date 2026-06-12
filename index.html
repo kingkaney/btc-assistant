@@ -2767,6 +2767,8 @@ function renderDrift() {
   const todayObs = (state.obsHistory || []).filter(r => r.time.toLocaleDateString("en-CA", { timeZone: TZ }) === todayLocalDate);
   let highSoFar = currentF;
   if (todayObs.length) highSoFar = Math.max(currentF, ...todayObs.map(r => r.tempF));
+  const bhD = bestHighToday(highSoFar);
+  if (bhD.f != null && bhD.f > highSoFar) highSoFar = bhD.f;
   const hsr = settleRead(highSoFar);
 
   const aiCall = getLockedAICall(date);
