@@ -323,6 +323,12 @@
   </div>
 </div>
 
+<!-- SKY WALL: live traffic-cam sky views along the marine-push corridor -->
+<div class="panel" id="skycam-panel">
+  <div class="panel-head"><span>📷 Sky Wall</span><span class="accent" id="skycam-status">—</span></div>
+  <div class="panel-body" id="skycam-body"></div>
+</div>
+
 <!-- HOURLY CURVE -->
 <div class="panel">
   <div class="panel-head"><span>Hourly Curve + Cloud Cover</span><span class="accent">°F · local</span></div>
@@ -3050,6 +3056,7 @@ function renderAll() {
   renderStationDots();
   renderNowcast();
   renderPace();
+  renderSkycams();
   renderBuckets();
   renderChart();
   renderCurrent();
@@ -4252,6 +4259,69 @@ function addMapLegend() {
 }
 
 // Green dots = official ASOS, yellow = personal/mesonet; rebuilt on each data refresh
+// =============================================================================
+// SKY WALL — public traffic-cam snapshots as a marine-layer early-warning wall.
+// Verified SDOT/WSDOT image feeds (refresh ~1-4 min); user can add any cam URL.
+// =============================================================================
+const SKYCAM_KEY = "ksea_skycams_v1";
+const SKYCAM_DEFAULTS = [
+  { label: "Elliott Bay waterfront", url: "https://www.seattle.gov/trafficcams/images/Elliott_Broad.jpg",
+    tells: "marine air over the Sound \u2014 a deck here is push fuel" },
+  { label: "SR-99 \u00b7 W Marginal (Duwamish)", url: "https://images.wsdot.wa.gov/nw/099vc02671.jpg",
+    tells: "south Seattle sky, ~8 mi N of KSEA" },
+  { label: "Airport Way S (Georgetown)", url: "https://www.seattle.gov/trafficcams/images/Airport_Norfolk.jpg",
+    tells: "Boeing Field corridor" },
+  { label: "I-5 @ NE 45th (U-District)", url: "https://images.wsdot.wa.gov/nw/005vc16939.jpg",
+    tells: "north reference \u2014 clears last on push days" },
+];
+function loadSkycams() {
+  try { const c = JSON.parse(localStorage.getItem(SKYCAM_KEY) || "null"); if (Array.isArray(c)) return c; } catch (e) {}
+  return [];
+}
+function saveSkycams(a) { try { localStorage.setItem(SKYCAM_KEY, JSON.stringify(a)); } catch (e) {} }
+function addSkycam() {
+  const url = prompt("Camera image URL (long-press a cam image \u2192 Copy image address):");
+  if (!url || !/^https:\/\//.test(url.trim())) { if (url) alert("Needs an https:// image URL"); return; }
+  const label = prompt("Label for this camera:", "My cam") || "My cam";
+  const a = loadSkycams(); a.push({ label, url: url.trim(), tells: "", custom: true });
+  saveSkycams(a); renderSkycams(true);
+}
+function removeSkycam(i) {
+  const a = loadSkycams(); a.splice(i, 1); saveSkycams(a); renderSkycams(true);
+}
+function renderSkycams(force) {
+  const body = document.getElementById("skycam-body");
+  const statusEl = document.getElementById("skycam-status");
+  const panel = document.getElementById("skycam-panel");
+  if (!body || !panel) return;
+  if (panel.classList.contains("collapsed") && !force) return;   // don't burn data while hidden
+  const stamp = Math.floor(Date.now() / 180000);                  // re-fetch every 3 min
+  const customs = loadSkycams();
+  const all = SKYCAM_DEFAULTS.concat(customs);
+  let h = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">`;
+  all.forEach((c, idx) => {
+    const src = c.url + (c.url.includes("?") ? "&" : "?") + "t=" + stamp;
+    const ci = idx - SKYCAM_DEFAULTS.length;                      // index into customs
+    h += `<div style="position:relative;background:#0b1430;border:1px solid rgba(255,255,255,0.07);border-radius:6px;overflow:hidden">
+      <a href="${c.url}" target="_blank" rel="noopener">
+        <img src="${src}" loading="lazy" alt="${c.label}" style="width:100%;height:96px;object-fit:cover;display:block"
+             onerror="this.style.display='none';this.parentElement.parentElement.querySelector('.camdead').style.display='flex'">
+      </a>
+      <div class="camdead" style="display:none;align-items:center;justify-content:center;height:96px;font-size:9px;color:#5d6c81">feed unavailable</div>
+      <div style="padding:4px 6px 5px">
+        <div style="font-size:9.5px;color:#cdd6e4;font-weight:600">${c.label}${c.custom ? ` <a href="#" onclick="removeSkycam(${ci});return false" style="color:#f87171;text-decoration:none">\u2715</a>` : ""}</div>
+        ${c.tells ? `<div style="font-size:8.5px;color:#5d6c81;line-height:1.35">${c.tells}</div>` : ""}
+      </div>
+    </div>`;
+  });
+  h += `</div>
+  <div style="margin-top:8px;font-size:9px;color:#7e8ea4;line-height:1.5">Read the wall coast\u2192north: gray water + clear inland = push incoming; all clear = sunshine wins. Images refresh ~every 3 min; tap to open full size.
+  <a href="#" onclick="addSkycam();return false" style="color:#60a5fa">\u2795 add camera</a> \u2014 find more at wsdot.com travel map or seattle.gov/trafficcams (long-press image \u2192 copy image address).</div>`;
+  body.innerHTML = h;
+  if (statusEl) { statusEl.textContent = `${all.length} cams`; statusEl.style.color = "#34d399"; }
+}
+setInterval(() => { try { if (document.visibilityState === "visible") renderSkycams(); } catch (e) {} }, 180000);
+
 function renderStationDots() {
   if (!MAP.map || !MAP.stnDots || typeof L === "undefined") return;
   MAP.stnDots.clearLayers();
@@ -4423,7 +4493,7 @@ const PANELS_KEY = "ksea_panels_v1";
   // collapsed on first run (until the user opens them once):
   const DEFAULT_COLLAPSED = new Set([
     "edge-panel", "score-panel", "blip-panel", "live1m-panel", "conditions-panel",
-    "leads-panel", "panel-7", "calib-panel", "map-panel",
+    "leads-panel", "panel-7", "calib-panel", "map-panel", "skycam-panel",
   ]);
   document.querySelectorAll(".panel").forEach((p, i) => {
     const head = p.querySelector(".panel-head");
