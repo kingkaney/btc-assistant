@@ -3747,17 +3747,33 @@ function renderPace() {
   todayObs.forEach(r => { if (r.tempF < low) { low = r.tempF; lowT = r.time; } });
   const climbed = currentF - low;
 
-  // observed rate: last 90 min, needs >=30 min of span
-  let rate = null, rateSpan = 0;
-  {
-    const cutoff = Date.now() - 90 * 60000;
-    const ro = todayObs.filter(r => r.time.getTime() >= cutoff);
-    if (ro.length >= 2) {
-      const a = ro[0], b = ro[ro.length - 1];
-      rateSpan = (b.time - a.time) / 60000;
-      if (rateSpan >= 30) rate = (b.tempF - a.tempF) / (rateSpan / 60);
+  // daily high so far — settlement reads the MAX, not the current temp. This is the projection floor.
+  let dayHigh = currentF;
+  todayObs.forEach(r => { if (r.tempF > dayHigh) dayHigh = r.tempF; });
+
+  // least-squares slope (°/hr) over a set of rows
+  const lsSlope = rows => {
+    if (rows.length < 2) return null;
+    const t0 = rows[0].time.getTime();
+    let n = rows.length, sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for (const r of rows) {
+      const x = (r.time.getTime() - t0) / 3600000, y = r.tempF;
+      sx += x; sy += y; sxx += x * x; sxy += x * y;
     }
-  }
+    const den = n * sxx - sx * sx;
+    return den === 0 ? null : (n * sxy - sx * sy) / den;
+  };
+  const spanMin = rows => rows.length < 2 ? 0 : (rows[rows.length - 1].time - rows[0].time) / 60000;
+
+  // windowRate = trailing 90m (context + deceleration baseline); recentRate = last ~25m (the real "now").
+  const win90 = todayObs.filter(r => r.time.getTime() >= Date.now() - 90 * 60000);
+  const win25 = todayObs.filter(r => r.time.getTime() >= Date.now() - 25 * 60000);
+  let windowRate = null, recentRate = null, rateSpan = spanMin(win90);
+  if (rateSpan >= 30) windowRate = lsSlope(win90);
+  if (spanMin(win25) >= 10) recentRate = lsSlope(win25);
+  // rate used for the verdict: prefer the recent slope, fall back to the window
+  const rate = (recentRate != null) ? recentRate : windowRate;
+  const decel = (windowRate != null && recentRate != null) ? (windowRate - recentRate) : 0;
 
   // target bucket (locked call, else projection)
   const aiCall = getLockedAICall(state.selectedDate);
@@ -3779,38 +3795,46 @@ function renderPace() {
   const fmtT = d => d ? new Date(d).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }) : "";
   const needRate = hrsLeft > 0.2 ? (needT - currentF) / hrsLeft : null;
   const pkLabel = `${pkHr > 12 ? pkHr - 12 : pkHr} ${pkHr >= 12 ? "PM" : "AM"}`;
+  const nearPeak = hrsLeft <= 2.5;  // inside the diurnal roll-off — linear extrapolation overshoots here
 
   let html = `<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:11px;color:#cdd6e4">
     <div><span style="color:#7e8ea4">climbed today</span><br><b style="font-size:17px;color:#eef3fa">${climbed >= 0 ? "+" : ""}${climbed.toFixed(1)}\u00b0</b><br><span style="font-size:9px;color:#5d6c81">${low.toFixed(1)}\u00b0${lowT ? ` @ ${fmtT(lowT)}` : ""} \u2192 ${currentF.toFixed(1)}\u00b0 now</span></div>
-    <div><span style="color:#7e8ea4">pace (last 90m)</span><br><b style="font-size:17px;color:#eef3fa">${rate != null ? (rate >= 0 ? "+" : "") + rate.toFixed(1) + "\u00b0/hr" : "\u2014"}</b><br><span style="font-size:9px;color:#5d6c81">${rate != null ? `${Math.round(rateSpan)}m of obs` : `need ~${Math.max(5, Math.round(30 - rateSpan))}m more obs`}</span></div>
+    <div><span style="color:#7e8ea4">pace (recent)</span><br><b style="font-size:17px;color:${decel > 0.5 && nearPeak ? "#fbbf24" : "#eef3fa"}">${rate != null ? (rate >= 0 ? "+" : "") + rate.toFixed(1) + "\u00b0/hr" : "\u2014"}</b><br><span style="font-size:9px;color:#5d6c81">${recentRate != null ? `last ~${Math.round(spanMin(win25))}m` : windowRate != null ? `90m fallback` : `need ~${Math.max(5, Math.round(30 - rateSpan))}m more obs`}${windowRate != null ? ` \u00b7 90m: ${windowRate >= 0 ? "+" : ""}${windowRate.toFixed(1)}` : ""}</span></div>
     <div><span style="color:#7e8ea4">needed for ${label}</span><br><b style="font-size:17px;color:#eef3fa">${needRate != null ? (needRate >= 0 ? "+" : "") + needRate.toFixed(1) + "\u00b0/hr" : "\u2014"}</b><br><span style="font-size:9px;color:#5d6c81">${(needT - currentF) >= 0 ? "+" : ""}${(needT - currentF).toFixed(1)}\u00b0 by ~${pkLabel}</span></div>
   </div>`;
 
   let verdict = "", color = "#9ca3af", stat = "\u2014";
-  if (currentF >= capT) {
-    verdict = `\u2b06 <b>Already past the top of ${label}.</b> Unless this is the peak, the settle lands above your bucket \u2014 upper bins are in play now.`;
+  if (dayHigh >= capT) {
+    verdict = `\u2b06 <b>High already at ${dayHigh.toFixed(1)}\u00b0 \u2014 past the top of ${label}.</b> The day's max is locked above your bucket; it can't come back down. Upper bins are the live question now.`;
     color = "#f87171"; stat = "OVER";
   } else if (hrsLeft <= 0.2) {
-    if (currentF >= needT) { verdict = `\u2705 <b>Inside ${label} at the peak hour.</b> The question flips to overshoot: ${ (capT - currentF).toFixed(1)}\u00b0 of headroom before it escapes out the top.`; color = "#34d399"; stat = "IN RANGE"; }
-    else { verdict = `\u23f3 <b>Past the typical peak and ${(needT - currentF).toFixed(1)}\u00b0 short.</b> Making ${label} now needs an unusual late push.`; color = "#fbbf24"; stat = "SHORT"; }
+    if (dayHigh >= needT) { verdict = `\u2705 <b>Inside ${label} at the peak hour</b> (high ${dayHigh.toFixed(1)}\u00b0). Question flips to overshoot: ${(capT - dayHigh).toFixed(1)}\u00b0 of headroom before it escapes out the top.`; color = "#34d399"; stat = "IN RANGE"; }
+    else { verdict = `\u23f3 <b>Past the typical peak and ${(needT - dayHigh).toFixed(1)}\u00b0 short</b> (high ${dayHigh.toFixed(1)}\u00b0). Making ${label} now needs an unusual late push.`; color = "#fbbf24"; stat = "SHORT"; }
   } else if (rate == null) {
     verdict = `Pace verdict arrives once ~30 min of recent observations exist.`;
     stat = "warming up";
   } else {
-    const proj = currentF + rate * hrsLeft;
-    if (proj < needT - 0.3) {
-      verdict = `\ud83d\udc22 <b>Too slow for ${label}.</b> At ${rate >= 0 ? "+" : ""}${rate.toFixed(1)}\u00b0/hr the day lands ~<b>${proj.toFixed(1)}\u00b0</b> \u2014 ${(needT - proj).toFixed(1)}\u00b0 short of the floor. Lower bins favored unless the rate picks up.`;
+    // Near the peak the diurnal curve flattens, so the rate decays toward 0 — don't extrapolate it flat.
+    // Floor the projection at the high already reached, since settlement reads the max.
+    const gain = nearPeak ? (Math.max(0, rate) / 2) * hrsLeft : rate * hrsLeft;
+    const proj = Math.max(dayHigh, currentF + gain);
+    if (nearPeak && decel > 0.5) {
+      const inBin = proj >= needT - 0.3 && proj <= capT + 0.3;
+      verdict = `\ud83d\udd04 <b>Rolling over into the peak.</b> Recent ${rate >= 0 ? "+" : ""}${rate.toFixed(1)}\u00b0/hr vs ${windowRate.toFixed(1)}\u00b0/hr over 90m \u2014 it's decelerating, so the flat-rate overshoot doesn't apply. With roll-off it lands ~<b>${proj.toFixed(1)}\u00b0</b>${inBin ? ` \u2014 inside ${label}.` : proj > capT ? ` \u2014 still above ${label}'s ceiling, but cooling toward it.` : `.`}`;
+      color = inBin ? "#34d399" : "#fbbf24"; stat = "ROLLING OVER";
+    } else if (proj < needT - 0.3) {
+      verdict = `\ud83d\udc22 <b>Too slow for ${label}.</b> At ${rate >= 0 ? "+" : ""}${rate.toFixed(1)}\u00b0/hr it projects ~<b>${proj.toFixed(1)}\u00b0</b> \u2014 ${(needT - proj).toFixed(1)}\u00b0 short of the floor. Lower bins favored unless the rate picks up.`;
       color = "#60a5fa"; stat = "TOO SLOW";
     } else if (proj > capT + 0.3) {
-      verdict = `\ud83d\udd25 <b>Too fast \u2014 overshoot risk.</b> At +${rate.toFixed(1)}\u00b0/hr the day lands ~<b>${proj.toFixed(1)}\u00b0</b>, blowing past ${label}\u2019s ceiling (${capT.toFixed(1)}\u00b0). Upper bins favored if this rate holds.`;
+      verdict = `\ud83d\udd25 <b>Too fast \u2014 overshoot risk.</b> At +${rate.toFixed(1)}\u00b0/hr${nearPeak ? " (roll-off applied)" : ""} it projects ~<b>${proj.toFixed(1)}\u00b0</b>, past ${label}'s ceiling (${capT.toFixed(1)}\u00b0). Upper bins favored if this holds.`;
       color = "#f87171"; stat = "TOO FAST";
     } else {
-      verdict = `\u2705 <b>On pace for ${label}.</b> Current rate projects ~<b>${proj.toFixed(1)}\u00b0</b> \u2014 inside the bucket. Required ${needRate.toFixed(1)}\u00b0/hr vs running ${rate.toFixed(1)}\u00b0/hr.`;
-      color = "#34d399"; stat = "ON PACE";
+      verdict = `\u2705 <b>${nearPeak ? `Cresting in ${label}` : `On pace for ${label}`}.</b> Projects ~<b>${proj.toFixed(1)}\u00b0</b> \u2014 inside the bucket. Needs ${needRate.toFixed(1)}\u00b0/hr, running ${rate.toFixed(1)}\u00b0/hr.`;
+      color = "#34d399"; stat = nearPeak ? "CRESTING" : "ON PACE";
     }
   }
   html += `<div style="margin-top:10px;padding:7px 9px;background:rgba(255,255,255,0.04);border-left:2px solid ${color};border-radius:4px;font-size:11px;line-height:1.55;color:#dbe4f0">${verdict}</div>`;
-  html += `<div style="margin-top:6px;font-size:9px;color:#5d6c81">linear extrapolation of the recent rate \u2014 it won't see clouds, wind shifts, or marine pushes coming. Pace, not prophecy.</div>`;
+  html += `<div style="margin-top:6px;font-size:9px;color:#5d6c81">${nearPeak ? "near the peak: projection applies diurnal roll-off and floors at today's high" : "linear extrapolation of the recent rate"} \u2014 it won't see clouds, wind shifts, or marine pushes coming. Pace, not prophecy.</div>`;
   set(html, stat, color);
 }
 
