@@ -179,6 +179,10 @@
 <!-- DRIFT VS FORECAST (intraday nowcast, today only) -->
 <div class="panel" id="drift-panel">
   <div class="panel-head"><span>📡 Tracking vs Forecast</span><span class="accent" id="drift-status">—</span></div>
+<div class="panel" id="speci-panel">
+  <div class="panel-head"><span>🚨 SPECI Watch</span><span class="accent" id="speci-status">—</span></div>
+  <div class="panel-body" id="speci-body"><div style="font-size:11px;color:#94a2b4">watching for off-cycle special observations…</div></div>
+</div>
   <div class="panel-body" id="drift-body"></div>
 </div>
 
@@ -2050,6 +2054,104 @@ function parseTGroup(raw) {
   return { c, f: +(c * 9 / 5 + 32).toFixed(1) };
 }
 
+const SPECI_KEY = "ksea_speci_v1";
+function loadSpeci() { try { return JSON.parse(localStorage.getItem(SPECI_KEY) || "{}"); } catch (e) { return {}; } }
+function saveSpeci(o) { try { localStorage.setItem(SPECI_KEY, JSON.stringify(o)); } catch (e) {} }
+
+// Poll aviationweather METAR JSON fast; catch SPECIs (off-cycle specials) the
+// instant they post, decode T-group tenths, alert. This is the lane that moves
+// the market between hourly obs and is invisible to whole-degree 5-min feeds.
+async function fetchSpeci(force) {
+  const cache = loadSpeci();
+  const now = Date.now();
+  if (!force && cache.lastFetch && now - cache.lastFetch < 25 * 1000) return;  // ~25s throttle
+  cache.lastFetch = now;
+  try {
+    // rawOb gives us the full METAR/SPECI string incl the report type + T-group
+    const r = await fetch("https://aviationweather.gov/api/data/metar?ids=KSEA&format=json&hours=2&taf=false");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const arr = await r.json();
+    cache.obs = cache.obs || {};            // keyed by obsTime, stores {raw,isSpeci,tf,tc}
+    (arr || []).forEach(o => {
+      const raw = o.rawOb || o.raw_text || "";
+      if (!raw) return;
+      const isSpeci = /\bSPECI\b/.test(raw) || (o.metarType === "SPECI");
+      const tg = parseTGroup(raw);
+      let tc = tg ? tg.c : (typeof o.temp === "number" ? o.temp : null);
+      if (tc == null) return;
+      const key = String(o.obsTime || o.receiptTime || raw.slice(0, 18));
+      cache.obs[key] = { raw, isSpeci, tc: +tc.toFixed(1), tf: +(tc * 9 / 5 + 32).toFixed(1),
+                         t: (o.obsTime ? o.obsTime * 1000 : now) };
+    });
+    // prune to last 24h
+    const cut = now - 86400 * 1000;
+    Object.keys(cache.obs).forEach(k => { if ((cache.obs[k].t || 0) < cut) delete cache.obs[k]; });
+
+    // detect a NEW speci we haven't alerted yet -> fire the talking/notification path if present
+    const specis = Object.values(cache.obs).filter(o => o.isSpeci).sort((a, b) => a.t - b.t);
+    const newest = specis[specis.length - 1];
+    if (newest && cache.lastAlertedSpeci !== newest.t) {
+      cache.lastAlertedSpeci = newest.t;
+      const tStr = new Date(newest.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+      const msg = `\U0001f6a8 KSEA SPECI ${newest.tf.toFixed(1)}\u00b0F (${newest.tc.toFixed(1)}\u00b0C) \u2014 settles ${Math.round(newest.tf)}\u00b0, off-cycle @ ${tStr}`;
+      if (typeof pushAlert === "function") { try { pushAlert(msg); } catch (e) {} }
+      else if (typeof addAlert === "function") { try { addAlert(msg); } catch (e) {} }
+      cache.banner = msg;
+    }
+    cache.error = null;
+  } catch (e) {
+    cache.error = String((e && e.message) || e);
+  }
+  saveSpeci(cache);
+  renderSpeci();
+}
+
+function renderSpeci() {
+  const body = document.getElementById("speci-body");
+  const statusEl = document.getElementById("speci-status");
+  if (!body) return;
+  const cache = loadSpeci();
+  const obs = cache.obs ? Object.values(cache.obs).sort((a, b) => b.t - a.t) : [];
+  const today = climateDayOfUTC(Date.now());
+  const todayObs = obs.filter(o => climateDayOfUTC(o.t) === today);
+  const todaySpecis = todayObs.filter(o => o.isSpeci);
+  const fmt = t => new Date(t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+
+  if (cache.error && !obs.length) {
+    body.innerHTML = `<div style="font-size:11px;color:#f87171">SPECI feed error: ${cache.error}</div>`;
+    if (statusEl) { statusEl.textContent = "error"; statusEl.style.color = "#f87171"; }
+    return;
+  }
+
+  let html = "";
+  // most recent observation overall (speci or routine), with its precise read
+  const latest = obs[0];
+  if (latest) {
+    const tag = latest.isSpeci ? `<span style="color:#f87171;font-weight:700">SPECI</span>` : `<span style="color:#94a2b4">routine</span>`;
+    html += `<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+      <div style="font-size:22px;font-weight:700;color:#eef3fa">${latest.tf.toFixed(1)}\u00b0F</div>
+      <div style="font-size:11px;color:#94a2b4">${latest.tc.toFixed(1)}\u00b0C \u00b7 settles <b style="color:#eef3fa">${Math.round(latest.tf)}\u00b0</b> \u00b7 ${tag} @ ${fmt(latest.t)}</div></div>`;
+  }
+
+  if (todaySpecis.length) {
+    html += `<div style="margin-top:9px;padding:7px 9px;background:rgba(248,113,113,0.08);border-left:2px solid #f87171;border-radius:4px;font-size:10.5px;line-height:1.55;color:#fecaca">
+      \U0001f6a8 <b>${todaySpecis.length} SPECI${todaySpecis.length > 1 ? "s" : ""} today</b> \u2014 these fired off-cycle and carry precise tenths the 5-min feed never shows:</div>`;
+    html += `<div style="margin-top:5px;font-size:10px;color:#cdd6e4;line-height:1.7">`;
+    todaySpecis.slice(0, 6).forEach(o => {
+      html += `${fmt(o.t)} \u00b7 <b>${o.tf.toFixed(1)}\u00b0F</b> (${o.tc.toFixed(1)}\u00b0C) \u2192 ${Math.round(o.tf)}\u00b0<br>`;
+    });
+    html += `</div>`;
+  } else {
+    html += `<div style="margin-top:9px;font-size:10px;color:#7e8ea4">No SPECIs yet today \u2014 routine hourly obs only. SPECIs fire when temp/wind/sky cross thresholds; this catches them within ~25s of posting.</div>`;
+  }
+  html += `<div style="margin-top:7px;font-size:9px;color:#5d6c81">source: aviationweather.gov \u00b7 polls ~25s. For origin-speed (tgftp), run the standalone collector on a VM.</div>`;
+  body.innerHTML = html;
+  if (statusEl) {
+    if (todaySpecis.length) { statusEl.textContent = `${todaySpecis.length} today`; statusEl.style.color = "#f87171"; }
+    else { statusEl.textContent = "watching"; statusEl.style.color = "#34d399"; }
+  }
+}
+
 async function fetchSixHour(force) {
   const cache = loadSixHr();
   const now = Date.now();
@@ -3056,6 +3158,7 @@ function renderAll() {
   renderStationDots();
   renderNowcast();
   renderPace();
+  renderSpeci();
   renderSkycams();
   renderBuckets();
   renderChart();
@@ -4580,6 +4683,8 @@ setInterval(() => fetchCLI(), 1_800_000); // …and every 30 min (CLI only updat
 setTimeout(() => fetchBlip(), 4000);      // 1-min archive backfill: after first paint…
 setInterval(() => fetchBlip(), 1_800_000); // …then every 30 min (archive lags days anyway)
 setInterval(() => pollLive1m(), 15_000);
+fetchSpeci();                              // SPECI watch: on load…
+setInterval(() => fetchSpeci(), 30_000);   // …then every 30s (catch off-cycle specials fast)
 fetchSixHour();                            // METAR 6-hr precise group: on load…
 setInterval(() => fetchSixHour(), 1_200_000); // …baseline every 20 min
 setInterval(() => {                           // burst window: METARs publish ~:53-:00, grab tenths within minutes
