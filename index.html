@@ -2064,24 +2064,27 @@ function saveSpeci(o) { try { localStorage.setItem(SPECI_KEY, JSON.stringify(o))
 async function fetchSpeci(force) {
   const cache = loadSpeci();
   const now = Date.now();
-  if (!force && cache.lastFetch && now - cache.lastFetch < 25 * 1000) return;  // ~25s throttle
+  if (!force && cache.lastFetch && now - cache.lastFetch < 45 * 1000) return;  // ~45s throttle (api.weather.gov)
   cache.lastFetch = now;
   try {
-    // rawOb gives us the full METAR/SPECI string incl the report type + T-group
-    const r = await fetch("https://aviationweather.gov/api/data/metar?ids=KSEA&format=json&hours=2&taf=false");
+    // api.weather.gov (same source as fetchSixHour, CORS-OK from the browser).
+    // rawMessage carries the full METAR/SPECI string incl report type + T-group.
+    const r = await fetch("https://api.weather.gov/stations/KSEA/observations?limit=20");
     if (!r.ok) throw new Error("HTTP " + r.status);
-    const arr = await r.json();
-    cache.obs = cache.obs || {};            // keyed by obsTime, stores {raw,isSpeci,tf,tc}
-    (arr || []).forEach(o => {
-      const raw = o.rawOb || o.raw_text || "";
-      if (!raw) return;
-      const isSpeci = /\bSPECI\b/.test(raw) || (o.metarType === "SPECI");
+    const j = await r.json();
+    const feats = j.features || [];
+    cache.obs = cache.obs || {};            // keyed by timestamp, stores {raw,isSpeci,tf,tc,t}
+    feats.forEach(ft => {
+      const p = ft.properties || {};
+      const raw = p.rawMessage || "";
+      if (!raw || !p.timestamp) return;
+      const isSpeci = /\bSPECI\b/.test(raw);
       const tg = parseTGroup(raw);
-      let tc = tg ? tg.c : (typeof o.temp === "number" ? o.temp : null);
-      if (tc == null) return;
-      const key = String(o.obsTime || o.receiptTime || raw.slice(0, 18));
-      cache.obs[key] = { raw, isSpeci, tc: +tc.toFixed(1), tf: +(tc * 9 / 5 + 32).toFixed(1),
-                         t: (o.obsTime ? o.obsTime * 1000 : now) };
+      let tc = tg ? tg.c : (p.temperature && p.temperature.value != null ? p.temperature.value : null);
+      if (tc == null || !(tc > -45 && tc < 55)) return;
+      const ms = Date.parse(p.timestamp);
+      cache.obs[p.timestamp] = { raw, isSpeci, tc: +tc.toFixed(1), tf: +(tc * 9 / 5 + 32).toFixed(1),
+                                 t: isFinite(ms) ? ms : now };
     });
     // prune to last 24h
     const cut = now - 86400 * 1000;
@@ -2144,7 +2147,7 @@ function renderSpeci() {
   } else {
     html += `<div style="margin-top:9px;font-size:10px;color:#7e8ea4">No SPECIs yet today \u2014 routine hourly obs only. SPECIs fire when temp/wind/sky cross thresholds; this catches them within ~25s of posting.</div>`;
   }
-  html += `<div style="margin-top:7px;font-size:9px;color:#5d6c81">source: aviationweather.gov \u00b7 polls ~25s. For origin-speed (tgftp), run the standalone collector on a VM.</div>`;
+  html += `<div style="margin-top:7px;font-size:9px;color:#5d6c81">source: api.weather.gov \u00b7 polls ~30s. For origin-speed (tgftp), run the standalone collector on a VM.</div>`;
   body.innerHTML = html;
   if (statusEl) {
     if (todaySpecis.length) { statusEl.textContent = `${todaySpecis.length} today`; statusEl.style.color = "#f87171"; }
@@ -4684,7 +4687,7 @@ setTimeout(() => fetchBlip(), 4000);      // 1-min archive backfill: after first
 setInterval(() => fetchBlip(), 1_800_000); // …then every 30 min (archive lags days anyway)
 setInterval(() => pollLive1m(), 15_000);
 fetchSpeci();                              // SPECI watch: on load…
-setInterval(() => fetchSpeci(), 30_000);   // …then every 30s (catch off-cycle specials fast)
+setInterval(() => fetchSpeci(), 45_000);   // …then every 45s (catch off-cycle specials)
 fetchSixHour();                            // METAR 6-hr precise group: on load…
 setInterval(() => fetchSixHour(), 1_200_000); // …baseline every 20 min
 setInterval(() => {                           // burst window: METARs publish ~:53-:00, grab tenths within minutes
