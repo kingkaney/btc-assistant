@@ -210,18 +210,6 @@
   <div class="panel-body" id="live1m-body"></div>
 </div>
 
-<!-- SEAM GAUGE: precise max vs contract .5°F lines (alive → amber → dead) -->
-<div class="panel" id="seam-panel">
-  <div class="panel-head"><span>🎯 Seam Gauge</span><span class="accent" id="seam-status">—</span></div>
-  <div class="panel-body" id="seam-body"></div>
-</div>
-
-<!-- SNAP CATCHER: fast settle-window poller + instant alert on the resolving ob -->
-<div class="panel" id="snap-panel">
-  <div class="panel-head"><span>⚡ Snap Catcher</span><span class="accent" id="snap-status">—</span></div>
-  <div class="panel-body" id="snap-body"></div>
-</div>
-
 <!-- LIVE CONDITIONS SUMMARY (today only) -->
 <div class="panel" id="conditions-panel">
   <div class="panel-head">
@@ -230,7 +218,8 @@
   </div>
   <div class="panel-body">
     <div id="conditions-summary" style="font-size:13px;color:#eef3fa;line-height:1.5;margin-bottom:10px">—</div>
-    <div id="conditions-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;font-size:11px"></div>
+    <div id="conditions-effect"></div>
+    <div id="conditions-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;font-size:11px;margin-top:10px"></div>
     <div id="hit-probability" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.08)"></div>
   </div>
 </div>
@@ -1582,6 +1571,59 @@ function windDescription(mph, dir) {
   return `strong ${dirStr} wind ${mph.toFixed(0)} mph`;
 }
 
+// KSEA-specific read of how the CURRENT wind + dew point are affecting temperature.
+// Encodes the station's geography: S/SW/W/WSW = marine push off Puget Sound (cooling),
+// N/NE/E/ESE = offshore/downslope (warming/drying), plus what the dew spread implies
+// for remaining heating headroom. Returns an HTML string (may be empty).
+function tempEffectDescription(c) {
+  if (!c) return "";
+  const bits = [];
+  const mph = c.windMph, dir = c.windDir;
+  const tempF = c.tempF, dewF = c.dewF;
+
+  // --- wind direction effect ---
+  if (mph != null && mph >= 3 && dir != null) {
+    const d = ((dir % 360) + 360) % 360;
+    // sectors
+    const marine = (d >= 180 && d <= 295);      // S through WNW: off the water
+    const offshore = (d >= 337.5 || d <= 100);  // NNW/N through E: offshore/downslope
+    const dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+    const ds = dirs[Math.round((d/22.5))%16];
+    const strength = mph < 8 ? "light" : mph < 16 ? "moderate" : "strong";
+
+    if (marine) {
+      const intensity = mph >= 16 ? "strongly capping" : mph >= 8 ? "capping" : "gently capping";
+      bits.push(`<b>${ds} wind is marine</b> — air off Puget Sound is ${intensity} the high${mph >= 16 ? "; a strong marine push often stalls or drops temps" : ", limiting how far it can climb"}.`);
+    } else if (offshore) {
+      const intensity = mph >= 16 ? "strongly favoring" : mph >= 8 ? "favoring" : "mildly favoring";
+      bits.push(`<b>${ds} wind is offshore</b> — downslope/continental flow is ${intensity} warming and drying; this is the regime that pushes KSEA toward its hottest readings.`);
+    } else {
+      // transitional sectors (SE-ish or NW-ish edges)
+      bits.push(`<b>${ds} wind</b> is transitional — neither a clean marine push nor offshore flow, so its temperature effect is muted right now.`);
+    }
+    if (mph < 3) bits.push(`Winds are nearly calm — local sun/surface effects dominate over any air-mass push.`);
+  } else if (mph != null && mph < 3) {
+    bits.push(`<b>Calm wind</b> — no marine or offshore push; temperature is driven by direct solar heating and local surface conditions.`);
+  }
+
+  // --- dew point / spread effect ---
+  if (tempF != null && dewF != null) {
+    const spread = tempF - dewF;
+    if (spread < 5) {
+      bits.push(`Dew point ${dewF.toFixed(0)}°F sits tight to the air temp (${spread.toFixed(1)}° spread) — moist air, often haze/marine layer; this suppresses heating.`);
+    } else if (spread < 15) {
+      bits.push(`Dew point ${dewF.toFixed(0)}°F gives a moderate ${spread.toFixed(1)}° spread — typical heating headroom, nothing unusual holding temps back.`);
+    } else if (spread < 28) {
+      bits.push(`Dew point ${dewF.toFixed(0)}°F is well below the air temp (${spread.toFixed(1)}° spread) — dry air heats efficiently, supporting a strong climb.`);
+    } else {
+      bits.push(`Very dry air (${spread.toFixed(1)}° dew spread) — minimal moisture to slow heating; favors the upper end of the range.`);
+    }
+  }
+
+  if (!bits.length) return "";
+  return `<div style="margin-top:8px;padding:8px 10px;background:rgba(96,165,250,0.06);border-left:2px solid #60a5fa;border-radius:4px;font-size:10.5px;line-height:1.6;color:#cdd6e4">🌡️ ${bits.join(" ")}</div>`;
+}
+
 // Time-aware probability of hitting today's projected high.
 // Combines: ensemble prob @ projected bucket, current temp's progress relative
 // to projection, and how much of the heating window is left.
@@ -1703,6 +1745,9 @@ function renderConditions() {
   const dewPart  = c.dewF  != null ? `dew ${c.dewF.toFixed(0)}°` : "";
   const rhPart   = rh != null ? `RH ${rh.toFixed(0)}%` : "";
   summaryEl.innerHTML = [tempPart, [dewPart, rhPart].filter(Boolean).join(", "), wind, cloud].filter(Boolean).join(", ") + ".";
+  // KSEA-specific interpretation of wind + dew effect on temperature
+  const effectEl = document.getElementById("conditions-effect");
+  if (effectEl) { try { effectEl.innerHTML = tempEffectDescription(c); } catch (e) { effectEl.innerHTML = ""; } }
 
   // Grid of detail stats
   gridEl.innerHTML = [
@@ -4710,233 +4755,6 @@ setTimeout(() => { try { fetchPersistFit(); } catch (e) {} }, 5000);  // weekly 
 setInterval(() => { if (MAP.inited) { loadRadar(); loadWindCloud(); } }, 300_000);
 setInterval(renderStatus, 5000);
 window.addEventListener("resize", () => { renderChart(); if (MAP.map) { try { MAP.map.invalidateSize(); } catch(e){} } });
-
-/* ===== SEAM GAUGE (add-on) =====
-   Visualizes the precise running max vs the day's contract .5°F lines, flipping
-   alive → amber (one tick away) → dead. Reads ONLY data the app already computes
-   (bestHighToday / preciseTodayBest) — no new network calls. Seam lines are saved
-   in localStorage ksea_seam_v1. */
-(function () {
-  "use strict";
-  var KEY = "ksea_seam_v1";
-  function seams() {
-    var raw = localStorage.getItem(KEY);
-    if (raw == null) raw = "70.5,72.5,74.5,76.5";
-    return raw.split(",").map(function (s) { return parseFloat(s.trim()); })
-              .filter(function (n) { return !isNaN(n); })
-              .sort(function (a, b) { return a - b; });
-  }
-  window.seamSet = function (v) { localStorage.setItem(KEY, String(v)); renderSeam(); };
-
-  function maxToday() {
-    var sampled = (typeof state !== "undefined" && state && state.current &&
-                   state.current.tempF != null) ? state.current.tempF : null;
-    try { if (typeof bestHighToday === "function") { var b = bestHighToday(sampled); if (b) return b; } } catch (e) {}
-    try { if (typeof preciseTodayBest === "function") { var p = preciseTodayBest(); if (p) return { f: p.f, src: p.src }; } } catch (e) {}
-    return { f: sampled, src: null };
-  }
-
-  window.renderSeam = function () {
-    var body = document.getElementById("seam-body");
-    var stat = document.getElementById("seam-status");
-    if (!body) return;
-    var S = seams();
-    var hi = maxToday(), maxF = hi.f;
-    var cfg = '<div style="display:flex;align-items:center;gap:7px;font-size:10px;color:#94a2b4;margin-top:10px">'
-      + '<span>seams °F</span><input value="' + S.join(", ") + '" onchange="seamSet(this.value)" '
-      + 'style="flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:#eef3fa;padding:3px 7px;font-size:10px"></div>';
-
-    if (maxF == null || !S.length) {
-      if (stat) { stat.textContent = "—"; stat.style.color = ""; }
-      body.innerHTML = '<div style="font-size:11px;color:#94a2b4">Waiting for a precise read (hourly T-group or 6-hr group).</div>' + cfg;
-      return;
-    }
-
-    var lo = S[0] - 2, hiR = S[S.length - 1] + 1.5, span = hiR - lo;
-    function pct(v) { return Math.max(0, Math.min(100, (v - lo) / span * 100)); }
-
-    var below = S.filter(function (s) { return maxF < s; });
-    var above = S.filter(function (s) { return maxF >= s; });
-    var color, stateTxt, sub;
-    if (below.length) {
-      var next = below[0], gap = next - maxF;
-      var deadNote = above.length ? (" · " + Math.floor(above[above.length - 1]) + "-line already dead") : "";
-      if (gap <= 0.5) {
-        color = "#fcd34d";
-        stateTxt = "⚠ " + gap.toFixed(1) + "°F under " + next;
-        sub = "one tick from flipping " + (next - 0.5) + "→" + (next + 0.5) + deadNote;
-      } else {
-        color = "#34d399";
-        stateTxt = "✓ " + Math.ceil(next - 0.5) + " or below — alive";
-        sub = gap.toFixed(1) + "°F of room under the " + next + " line" + deadNote;
-      }
-    } else {
-      color = "#f87171";
-      var top = above[above.length - 1];
-      stateTxt = "✗ " + (top - 0.5) + "-line dead";
-      sub = "max cleared every configured seam · settle " + Math.round(maxF) + "+";
-    }
-    if (stat) { stat.textContent = maxF.toFixed(1) + "°F"; stat.style.color = color; }
-
-    var marks = S.map(function (s) {
-      var x = pct(s);
-      return '<div style="position:absolute;top:0;bottom:0;left:' + x + '%;width:2px;background:#7e8ea4"></div>'
-           + '<div style="position:absolute;top:2px;left:' + x + '%;transform:translateX(-50%);font-size:9px;color:#8ba0bd">' + s + '</div>';
-    }).join("");
-    var nx = pct(maxF);
-    var gauge = '<div style="position:relative;height:44px;border:1px solid rgba(255,255,255,0.12);border-radius:8px;overflow:hidden;background:rgba(255,255,255,0.03);margin:6px 0 8px">'
-      + '<div style="position:absolute;left:0;top:0;bottom:0;width:' + nx + '%;background:' + color + ';opacity:0.22"></div>'
-      + marks
-      + '<div style="position:absolute;top:0;bottom:0;left:' + nx + '%;width:2px;background:#fff"></div>'
-      + '</div>';
-
-    body.innerHTML =
-      '<div style="font-size:11px;color:#aab6c6">precise max so far &nbsp;<b style="font-size:20px;color:#f4f7fb">' + maxF.toFixed(1) + '</b>°F · ' + (hi.src || "own obs") + '</div>'
-      + gauge
-      + '<div style="font-size:13px;font-weight:600;color:' + color + '">' + stateTxt + '</div>'
-      + '<div style="font-size:10px;color:#94a2b4;margin-top:3px">' + sub + '</div>'
-      + cfg;
-  };
-
-  setTimeout(function () { try { renderSeam(); } catch (e) {} }, 1200);
-  setInterval(function () { try { renderSeam(); } catch (e) {} }, 5000);
-})();
-
-/* ===== SNAP CATCHER (add-on) =====
-   In the settle window, polls api.weather.gov fast, parses the newest ob with
-   the app's own parseTGroup/parseSixHrGroup, feeds the SIXHR + SPECI caches so
-   every lane (incl. the seam gauge) updates instantly, and fires triggerAlert()
-   the moment a new SPECI / seam cross / near-seam max lands — so you react at
-   detection speed, not eyeball speed.
-   HONEST LIMITS: catches the TAIL of a ~3s snap, never the head. Needs this tab
-   foregrounded — backgrounded Chrome throttles the timer and audio. For true
-   unattended alerts, use the Termux watcher. */
-(function () {
-  "use strict";
-  var CFG_KEY = "ksea_snap_v1";
-  function cfg() {
-    var d = { armed: true, fastMs: 3000, startH: 10, endH: 19 };
-    try { return Object.assign(d, JSON.parse(localStorage.getItem(CFG_KEY) || "{}")); } catch (e) { return d; }
-  }
-  function setCfg(o) { try { localStorage.setItem(CFG_KEY, JSON.stringify(o)); } catch (e) {} }
-
-  var lastSeenTs = 0, primed = false, alertedMax = -999, alertedSeams = {}, backoffUntil = 0, timer = null;
-
-  function seams() {
-    try {
-      var raw = localStorage.getItem("ksea_seam_v1");
-      if (raw == null) raw = "70.5,72.5,74.5,76.5";
-      return raw.split(",").map(function (s) { return parseFloat(s.trim()); })
-                .filter(function (n) { return !isNaN(n); }).sort(function (a, b) { return a - b; });
-    } catch (e) { return []; }
-  }
-  function pacHour() {
-    try { return parseInt(new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "2-digit", hour12: false }).format(new Date()), 10); }
-    catch (e) { return new Date().getHours(); }
-  }
-  function inWindow() { var c = cfg(), h = pacHour(); return c.startH <= c.endH ? (h >= c.startH && h < c.endH) : (h >= c.startH || h < c.endH); }
-  function dayKey(ms) { return (typeof climateDayOfUTC === "function") ? climateDayOfUTC(ms) : new Date(ms).toLocaleDateString("en-CA", { timeZone: TZ }); }
-
-  function ingest(ts, iso, raw, isSpeci, tg) {
-    try {
-      var sx = loadSixHr(); sx.tgroups = sx.tgroups || {}; sx.entries = sx.entries || {};
-      if (tg) sx.tgroups[iso] = tg;
-      var g = parseSixHrGroup(raw); if (g) sx.entries[iso] = g;
-      saveSixHr(sx);
-    } catch (e) {}
-    try {
-      var sp = loadSpeci(); sp.obs = sp.obs || {};
-      if (tg) sp.obs[iso] = { raw: raw, isSpeci: isSpeci, tc: tg.c, tf: tg.f, t: ts };
-      if (isSpeci) sp.lastAlertedSpeci = ts;   // claim it so the 45s path won't double-fire
-      saveSpeci(sp);
-    } catch (e) {}
-    try { if (typeof renderSpeci === "function") renderSpeci(); } catch (e) {}
-    try { if (typeof renderSeam === "function") renderSeam(); } catch (e) {}
-  }
-
-  function fire(title, body) {
-    if (typeof triggerAlert === "function") { try { triggerAlert("⚡ " + title, body); return; } catch (e) {} }
-    try { if (navigator.vibrate) navigator.vibrate([300, 120, 300]); } catch (e) {}
-  }
-
-  function maybeAlert(ts, isSpeci, tg) {
-    var day = dayKey(ts), S = seams();
-    var fused = (typeof bestHighToday === "function") ? ((bestHighToday(null) || {}).f) : null;
-    var refMax = tg ? Math.max(tg.f, fused != null ? fused : -999) : (fused != null ? fused : null);
-    if (isSpeci) {
-      if (tg) fire("SPECI " + tg.f.toFixed(1) + "°F", "off-cycle · settles " + Math.round(tg.f) + "° · " + tg.c.toFixed(1) + "°C");
-      else fire("SPECI", "off-cycle special posted");
-    }
-    if (refMax == null) return;
-    alertedSeams[day] = alertedSeams[day] || {};
-    S.forEach(function (s) {
-      if (refMax >= s && !alertedSeams[day][s]) {
-        alertedSeams[day][s] = true;
-        fire("SEAM " + s + "°F crossed", "max " + refMax.toFixed(1) + "°F → " + (s - 0.5) + "-line dead, leaning " + (s + 0.5) + "+");
-      }
-    });
-    if (!isSpeci && tg && tg.f > alertedMax + 0.05) {
-      var near = S.some(function (s) { return Math.abs(tg.f - s) <= 0.6; });
-      if (near) { alertedMax = tg.f; fire("New max " + tg.f.toFixed(1) + "°F", tg.c.toFixed(1) + "°C · near a seam"); }
-    }
-  }
-
-  async function poll() {
-    var c = cfg(); render();
-    if (!c.armed || !inWindow() || (typeof document !== "undefined" && document.hidden) || Date.now() < backoffUntil) return;
-    try {
-      var r = await fetch("https://api.weather.gov/stations/KSEA/observations?limit=5");
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      var j = await r.json();
-      var rows = (j.features || []).map(function (ft) { return ft.properties || {}; })
-        .filter(function (p) { return p.rawMessage && p.timestamp; })
-        .sort(function (a, b) { return Date.parse(a.timestamp) - Date.parse(b.timestamp); });
-      rows.forEach(function (p) {
-        var ts = Date.parse(p.timestamp); if (!isFinite(ts) || ts <= lastSeenTs) return;
-        var raw = p.rawMessage, isSpeci = /\bSPECI\b/.test(raw), tg = parseTGroup(raw);
-        if (!tg && p.temperature && p.temperature.value != null) {
-          var cc = p.temperature.value; if (cc > -45 && cc < 55) tg = { c: +cc.toFixed(1), f: +(cc * 9 / 5 + 32).toFixed(1) };
-        }
-        ingest(ts, p.timestamp, raw, isSpeci, tg);
-        if (primed) maybeAlert(ts, isSpeci, tg);
-        lastSeenTs = ts;
-      });
-      primed = true; window._snapErr = null;
-    } catch (e) {
-      window._snapErr = String((e && e.message) || e);
-      backoffUntil = Date.now() + 20000;       // 20s backoff on rate-limit/error
-    }
-    render();
-  }
-
-  function render() {
-    var body = document.getElementById("snap-body"), st = document.getElementById("snap-status");
-    if (!body) return;
-    var c = cfg(), active = c.armed && inWindow();
-    if (st) { st.textContent = active ? (c.fastMs / 1000) + "s" : (c.armed ? "idle" : "off"); st.style.color = active ? "#34d399" : "#8ba0bd"; }
-    var lastStr = lastSeenTs ? new Date(lastSeenTs).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }) : "—";
-    var inp = "background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:#eef3fa;padding:3px 7px;font-size:10px";
-    body.innerHTML =
-      '<div style="font-size:11px;color:#aab6c6;line-height:1.6">state <b style="color:' + (active ? "#34d399" : "#8ba0bd") + '">'
-        + (active ? "ARMED · polling " + (c.fastMs / 1000) + "s" : (c.armed ? "armed · outside window" : "disarmed")) + '</b><br>'
-        + 'last ob seen ' + lastStr + (window._snapErr ? ' <span style="color:#fca5a5">· ' + window._snapErr + ' (backing off)</span>' : '') + '</div>'
-      + '<div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">'
-        + '<button onclick="snapToggle()" style="font:inherit;font-size:11px;background:' + (c.armed ? "rgba(52,211,153,0.15)" : "rgba(255,255,255,0.06)") + ';border:1px solid ' + (c.armed ? "#34d399" : "rgba(255,255,255,0.15)") + ';color:' + (c.armed ? "#34d399" : "#cdd9e8") + ';border-radius:8px;padding:6px 13px;cursor:pointer">' + (c.armed ? "✓ Armed" : "Arm") + '</button>'
-        + '<button onclick="snapTest()" style="font:inherit;font-size:11px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);color:#cdd9e8;border-radius:8px;padding:6px 13px;cursor:pointer">Test alert</button></div>'
-      + '<div style="display:flex;align-items:center;gap:7px;font-size:10px;color:#94a2b4;margin-top:8px">'
-        + '<span>window</span><input value="' + c.startH + '-' + c.endH + '" onchange="snapWindow(this.value)" style="width:64px;' + inp + '">'
-        + '<span>poll s</span><input value="' + (c.fastMs / 1000) + '" onchange="snapInterval(this.value)" style="width:48px;' + inp + '"></div>'
-      + '<div style="font-size:9px;color:#6f7f96;margin-top:8px;line-height:1.5">In-window polling only. Catches the tail of a snap, not the head. Needs this tab foregrounded — backgrounded Chrome throttles the timer. True background alerts → Termux watcher.</div>';
-  }
-
-  window.snapToggle = function () { var c = cfg(); c.armed = !c.armed; setCfg(c); if (c.armed) { try { playAlertSound(); } catch (e) {} } render(); };
-  window.snapTest = function () { try { playAlertSound(); } catch (e) {} fire("Test", "alert channels firing"); };
-  window.snapWindow = function (v) { var m = String(v).split("-"), a = parseInt(m[0], 10), b = parseInt(m[1], 10); if (isFinite(a) && isFinite(b)) { var c = cfg(); c.startH = a; c.endH = b; setCfg(c); } render(); };
-  window.snapInterval = function (v) { var n = parseFloat(v); if (isFinite(n) && n >= 1) { var c = cfg(); c.fastMs = Math.round(n * 1000); setCfg(c); restart(); } render(); };
-
-  function restart() { if (timer) clearInterval(timer); timer = setInterval(poll, Math.max(1000, cfg().fastMs)); }
-  setTimeout(function () { poll(); restart(); }, 1500);
-})();
 </script>
 </body>
 </html>
