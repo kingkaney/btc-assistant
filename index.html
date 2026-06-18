@@ -210,6 +210,12 @@
   <div class="panel-body" id="live1m-body"></div>
 </div>
 
+<!-- SEAM GAUGE: precise max vs contract .5°F lines (alive → amber → dead) -->
+<div class="panel" id="seam-panel">
+  <div class="panel-head"><span>🎯 Seam Gauge</span><span class="accent" id="seam-status">—</span></div>
+  <div class="panel-body" id="seam-body"></div>
+</div>
+
 <!-- LIVE CONDITIONS SUMMARY (today only) -->
 <div class="panel" id="conditions-panel">
   <div class="panel-head">
@@ -4698,6 +4704,97 @@ setTimeout(() => { try { fetchPersistFit(); } catch (e) {} }, 5000);  // weekly 
 setInterval(() => { if (MAP.inited) { loadRadar(); loadWindCloud(); } }, 300_000);
 setInterval(renderStatus, 5000);
 window.addEventListener("resize", () => { renderChart(); if (MAP.map) { try { MAP.map.invalidateSize(); } catch(e){} } });
+
+/* ===== SEAM GAUGE (add-on) =====
+   Visualizes the precise running max vs the day's contract .5°F lines, flipping
+   alive → amber (one tick away) → dead. Reads ONLY data the app already computes
+   (bestHighToday / preciseTodayBest) — no new network calls. Seam lines are saved
+   in localStorage ksea_seam_v1. */
+(function () {
+  "use strict";
+  var KEY = "ksea_seam_v1";
+  function seams() {
+    var raw = localStorage.getItem(KEY);
+    if (raw == null) raw = "70.5,72.5,74.5,76.5";
+    return raw.split(",").map(function (s) { return parseFloat(s.trim()); })
+              .filter(function (n) { return !isNaN(n); })
+              .sort(function (a, b) { return a - b; });
+  }
+  window.seamSet = function (v) { localStorage.setItem(KEY, String(v)); renderSeam(); };
+
+  function maxToday() {
+    var sampled = (typeof state !== "undefined" && state && state.current &&
+                   state.current.tempF != null) ? state.current.tempF : null;
+    try { if (typeof bestHighToday === "function") { var b = bestHighToday(sampled); if (b) return b; } } catch (e) {}
+    try { if (typeof preciseTodayBest === "function") { var p = preciseTodayBest(); if (p) return { f: p.f, src: p.src }; } } catch (e) {}
+    return { f: sampled, src: null };
+  }
+
+  window.renderSeam = function () {
+    var body = document.getElementById("seam-body");
+    var stat = document.getElementById("seam-status");
+    if (!body) return;
+    var S = seams();
+    var hi = maxToday(), maxF = hi.f;
+    var cfg = '<div style="display:flex;align-items:center;gap:7px;font-size:10px;color:#94a2b4;margin-top:10px">'
+      + '<span>seams °F</span><input value="' + S.join(", ") + '" onchange="seamSet(this.value)" '
+      + 'style="flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:#eef3fa;padding:3px 7px;font-size:10px"></div>';
+
+    if (maxF == null || !S.length) {
+      if (stat) { stat.textContent = "—"; stat.style.color = ""; }
+      body.innerHTML = '<div style="font-size:11px;color:#94a2b4">Waiting for a precise read (hourly T-group or 6-hr group).</div>' + cfg;
+      return;
+    }
+
+    var lo = S[0] - 2, hiR = S[S.length - 1] + 1.5, span = hiR - lo;
+    function pct(v) { return Math.max(0, Math.min(100, (v - lo) / span * 100)); }
+
+    var below = S.filter(function (s) { return maxF < s; });
+    var above = S.filter(function (s) { return maxF >= s; });
+    var color, stateTxt, sub;
+    if (below.length) {
+      var next = below[0], gap = next - maxF;
+      var deadNote = above.length ? (" · " + Math.floor(above[above.length - 1]) + "-line already dead") : "";
+      if (gap <= 0.5) {
+        color = "#fcd34d";
+        stateTxt = "⚠ " + gap.toFixed(1) + "°F under " + next;
+        sub = "one tick from flipping " + (next - 0.5) + "→" + (next + 0.5) + deadNote;
+      } else {
+        color = "#34d399";
+        stateTxt = "✓ " + Math.ceil(next - 0.5) + " or below — alive";
+        sub = gap.toFixed(1) + "°F of room under the " + next + " line" + deadNote;
+      }
+    } else {
+      color = "#f87171";
+      var top = above[above.length - 1];
+      stateTxt = "✗ " + (top - 0.5) + "-line dead";
+      sub = "max cleared every configured seam · settle " + Math.round(maxF) + "+";
+    }
+    if (stat) { stat.textContent = maxF.toFixed(1) + "°F"; stat.style.color = color; }
+
+    var marks = S.map(function (s) {
+      var x = pct(s);
+      return '<div style="position:absolute;top:0;bottom:0;left:' + x + '%;width:2px;background:#7e8ea4"></div>'
+           + '<div style="position:absolute;top:2px;left:' + x + '%;transform:translateX(-50%);font-size:9px;color:#8ba0bd">' + s + '</div>';
+    }).join("");
+    var nx = pct(maxF);
+    var gauge = '<div style="position:relative;height:44px;border:1px solid rgba(255,255,255,0.12);border-radius:8px;overflow:hidden;background:rgba(255,255,255,0.03);margin:6px 0 8px">'
+      + '<div style="position:absolute;left:0;top:0;bottom:0;width:' + nx + '%;background:' + color + ';opacity:0.22"></div>'
+      + marks
+      + '<div style="position:absolute;top:0;bottom:0;left:' + nx + '%;width:2px;background:#fff"></div>'
+      + '</div>';
+
+    body.innerHTML =
+      '<div style="font-size:11px;color:#aab6c6">precise max so far &nbsp;<b style="font-size:20px;color:#f4f7fb">' + maxF.toFixed(1) + '</b>°F · ' + (hi.src || "own obs") + '</div>'
+      + gauge
+      + '<div style="font-size:13px;font-weight:600;color:' + color + '">' + stateTxt + '</div>'
+      + '<div style="font-size:10px;color:#94a2b4;margin-top:3px">' + sub + '</div>'
+      + cfg;
+  };
+
+  setTimeout(function () { try { renderSeam(); } catch (e) {} }, 1200);
+  setInterval(function () { try { renderSeam(); } catch (e) {} }, 5000);
+})();
 </script>
 </body>
 </html>
