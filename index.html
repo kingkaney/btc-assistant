@@ -216,6 +216,12 @@
   <div class="panel-body" id="seam-body"></div>
 </div>
 
+<!-- SNAP CATCHER: fast settle-window poller + instant alert on the resolving ob -->
+<div class="panel" id="snap-panel">
+  <div class="panel-head"><span>⚡ Snap Catcher</span><span class="accent" id="snap-status">—</span></div>
+  <div class="panel-body" id="snap-body"></div>
+</div>
+
 <!-- LIVE CONDITIONS SUMMARY (today only) -->
 <div class="panel" id="conditions-panel">
   <div class="panel-head">
@@ -4794,6 +4800,142 @@ window.addEventListener("resize", () => { renderChart(); if (MAP.map) { try { MA
 
   setTimeout(function () { try { renderSeam(); } catch (e) {} }, 1200);
   setInterval(function () { try { renderSeam(); } catch (e) {} }, 5000);
+})();
+
+/* ===== SNAP CATCHER (add-on) =====
+   In the settle window, polls api.weather.gov fast, parses the newest ob with
+   the app's own parseTGroup/parseSixHrGroup, feeds the SIXHR + SPECI caches so
+   every lane (incl. the seam gauge) updates instantly, and fires triggerAlert()
+   the moment a new SPECI / seam cross / near-seam max lands — so you react at
+   detection speed, not eyeball speed.
+   HONEST LIMITS: catches the TAIL of a ~3s snap, never the head. Needs this tab
+   foregrounded — backgrounded Chrome throttles the timer and audio. For true
+   unattended alerts, use the Termux watcher. */
+(function () {
+  "use strict";
+  var CFG_KEY = "ksea_snap_v1";
+  function cfg() {
+    var d = { armed: true, fastMs: 3000, startH: 10, endH: 19 };
+    try { return Object.assign(d, JSON.parse(localStorage.getItem(CFG_KEY) || "{}")); } catch (e) { return d; }
+  }
+  function setCfg(o) { try { localStorage.setItem(CFG_KEY, JSON.stringify(o)); } catch (e) {} }
+
+  var lastSeenTs = 0, primed = false, alertedMax = -999, alertedSeams = {}, backoffUntil = 0, timer = null;
+
+  function seams() {
+    try {
+      var raw = localStorage.getItem("ksea_seam_v1");
+      if (raw == null) raw = "70.5,72.5,74.5,76.5";
+      return raw.split(",").map(function (s) { return parseFloat(s.trim()); })
+                .filter(function (n) { return !isNaN(n); }).sort(function (a, b) { return a - b; });
+    } catch (e) { return []; }
+  }
+  function pacHour() {
+    try { return parseInt(new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "2-digit", hour12: false }).format(new Date()), 10); }
+    catch (e) { return new Date().getHours(); }
+  }
+  function inWindow() { var c = cfg(), h = pacHour(); return c.startH <= c.endH ? (h >= c.startH && h < c.endH) : (h >= c.startH || h < c.endH); }
+  function dayKey(ms) { return (typeof climateDayOfUTC === "function") ? climateDayOfUTC(ms) : new Date(ms).toLocaleDateString("en-CA", { timeZone: TZ }); }
+
+  function ingest(ts, iso, raw, isSpeci, tg) {
+    try {
+      var sx = loadSixHr(); sx.tgroups = sx.tgroups || {}; sx.entries = sx.entries || {};
+      if (tg) sx.tgroups[iso] = tg;
+      var g = parseSixHrGroup(raw); if (g) sx.entries[iso] = g;
+      saveSixHr(sx);
+    } catch (e) {}
+    try {
+      var sp = loadSpeci(); sp.obs = sp.obs || {};
+      if (tg) sp.obs[iso] = { raw: raw, isSpeci: isSpeci, tc: tg.c, tf: tg.f, t: ts };
+      if (isSpeci) sp.lastAlertedSpeci = ts;   // claim it so the 45s path won't double-fire
+      saveSpeci(sp);
+    } catch (e) {}
+    try { if (typeof renderSpeci === "function") renderSpeci(); } catch (e) {}
+    try { if (typeof renderSeam === "function") renderSeam(); } catch (e) {}
+  }
+
+  function fire(title, body) {
+    if (typeof triggerAlert === "function") { try { triggerAlert("⚡ " + title, body); return; } catch (e) {} }
+    try { if (navigator.vibrate) navigator.vibrate([300, 120, 300]); } catch (e) {}
+  }
+
+  function maybeAlert(ts, isSpeci, tg) {
+    var day = dayKey(ts), S = seams();
+    var fused = (typeof bestHighToday === "function") ? ((bestHighToday(null) || {}).f) : null;
+    var refMax = tg ? Math.max(tg.f, fused != null ? fused : -999) : (fused != null ? fused : null);
+    if (isSpeci) {
+      if (tg) fire("SPECI " + tg.f.toFixed(1) + "°F", "off-cycle · settles " + Math.round(tg.f) + "° · " + tg.c.toFixed(1) + "°C");
+      else fire("SPECI", "off-cycle special posted");
+    }
+    if (refMax == null) return;
+    alertedSeams[day] = alertedSeams[day] || {};
+    S.forEach(function (s) {
+      if (refMax >= s && !alertedSeams[day][s]) {
+        alertedSeams[day][s] = true;
+        fire("SEAM " + s + "°F crossed", "max " + refMax.toFixed(1) + "°F → " + (s - 0.5) + "-line dead, leaning " + (s + 0.5) + "+");
+      }
+    });
+    if (!isSpeci && tg && tg.f > alertedMax + 0.05) {
+      var near = S.some(function (s) { return Math.abs(tg.f - s) <= 0.6; });
+      if (near) { alertedMax = tg.f; fire("New max " + tg.f.toFixed(1) + "°F", tg.c.toFixed(1) + "°C · near a seam"); }
+    }
+  }
+
+  async function poll() {
+    var c = cfg(); render();
+    if (!c.armed || !inWindow() || (typeof document !== "undefined" && document.hidden) || Date.now() < backoffUntil) return;
+    try {
+      var r = await fetch("https://api.weather.gov/stations/KSEA/observations?limit=5");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      var j = await r.json();
+      var rows = (j.features || []).map(function (ft) { return ft.properties || {}; })
+        .filter(function (p) { return p.rawMessage && p.timestamp; })
+        .sort(function (a, b) { return Date.parse(a.timestamp) - Date.parse(b.timestamp); });
+      rows.forEach(function (p) {
+        var ts = Date.parse(p.timestamp); if (!isFinite(ts) || ts <= lastSeenTs) return;
+        var raw = p.rawMessage, isSpeci = /\bSPECI\b/.test(raw), tg = parseTGroup(raw);
+        if (!tg && p.temperature && p.temperature.value != null) {
+          var cc = p.temperature.value; if (cc > -45 && cc < 55) tg = { c: +cc.toFixed(1), f: +(cc * 9 / 5 + 32).toFixed(1) };
+        }
+        ingest(ts, p.timestamp, raw, isSpeci, tg);
+        if (primed) maybeAlert(ts, isSpeci, tg);
+        lastSeenTs = ts;
+      });
+      primed = true; window._snapErr = null;
+    } catch (e) {
+      window._snapErr = String((e && e.message) || e);
+      backoffUntil = Date.now() + 20000;       // 20s backoff on rate-limit/error
+    }
+    render();
+  }
+
+  function render() {
+    var body = document.getElementById("snap-body"), st = document.getElementById("snap-status");
+    if (!body) return;
+    var c = cfg(), active = c.armed && inWindow();
+    if (st) { st.textContent = active ? (c.fastMs / 1000) + "s" : (c.armed ? "idle" : "off"); st.style.color = active ? "#34d399" : "#8ba0bd"; }
+    var lastStr = lastSeenTs ? new Date(lastSeenTs).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }) : "—";
+    var inp = "background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:#eef3fa;padding:3px 7px;font-size:10px";
+    body.innerHTML =
+      '<div style="font-size:11px;color:#aab6c6;line-height:1.6">state <b style="color:' + (active ? "#34d399" : "#8ba0bd") + '">'
+        + (active ? "ARMED · polling " + (c.fastMs / 1000) + "s" : (c.armed ? "armed · outside window" : "disarmed")) + '</b><br>'
+        + 'last ob seen ' + lastStr + (window._snapErr ? ' <span style="color:#fca5a5">· ' + window._snapErr + ' (backing off)</span>' : '') + '</div>'
+      + '<div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">'
+        + '<button onclick="snapToggle()" style="font:inherit;font-size:11px;background:' + (c.armed ? "rgba(52,211,153,0.15)" : "rgba(255,255,255,0.06)") + ';border:1px solid ' + (c.armed ? "#34d399" : "rgba(255,255,255,0.15)") + ';color:' + (c.armed ? "#34d399" : "#cdd9e8") + ';border-radius:8px;padding:6px 13px;cursor:pointer">' + (c.armed ? "✓ Armed" : "Arm") + '</button>'
+        + '<button onclick="snapTest()" style="font:inherit;font-size:11px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);color:#cdd9e8;border-radius:8px;padding:6px 13px;cursor:pointer">Test alert</button></div>'
+      + '<div style="display:flex;align-items:center;gap:7px;font-size:10px;color:#94a2b4;margin-top:8px">'
+        + '<span>window</span><input value="' + c.startH + '-' + c.endH + '" onchange="snapWindow(this.value)" style="width:64px;' + inp + '">'
+        + '<span>poll s</span><input value="' + (c.fastMs / 1000) + '" onchange="snapInterval(this.value)" style="width:48px;' + inp + '"></div>'
+      + '<div style="font-size:9px;color:#6f7f96;margin-top:8px;line-height:1.5">In-window polling only. Catches the tail of a snap, not the head. Needs this tab foregrounded — backgrounded Chrome throttles the timer. True background alerts → Termux watcher.</div>';
+  }
+
+  window.snapToggle = function () { var c = cfg(); c.armed = !c.armed; setCfg(c); if (c.armed) { try { playAlertSound(); } catch (e) {} } render(); };
+  window.snapTest = function () { try { playAlertSound(); } catch (e) {} fire("Test", "alert channels firing"); };
+  window.snapWindow = function (v) { var m = String(v).split("-"), a = parseInt(m[0], 10), b = parseInt(m[1], 10); if (isFinite(a) && isFinite(b)) { var c = cfg(); c.startH = a; c.endH = b; setCfg(c); } render(); };
+  window.snapInterval = function (v) { var n = parseFloat(v); if (isFinite(n) && n >= 1) { var c = cfg(); c.fastMs = Math.round(n * 1000); setCfg(c); restart(); } render(); };
+
+  function restart() { if (timer) clearInterval(timer); timer = setInterval(poll, Math.max(1000, cfg().fastMs)); }
+  setTimeout(function () { poll(); restart(); }, 1500);
 })();
 </script>
 </body>
