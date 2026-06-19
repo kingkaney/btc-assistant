@@ -181,6 +181,10 @@
   <div class="panel-head"><span>📡 Tracking vs Forecast</span><span class="accent" id="drift-status">—</span></div>
 <div class="panel" id="speci-panel">
   <div class="panel-head"><span>🚨 SPECI Watch</span><span class="accent" id="speci-status">—</span></div>
+<div class="panel" id="insight-panel">
+  <div class="panel-head"><span>🧠 Edge Insights</span><span class="accent" id="insight-status">—</span></div>
+  <div class="panel-body" id="insight-body"><div style="font-size:11px;color:#94a2b4">computing ceiling, divergence, reliability…</div></div>
+</div>
   <div class="panel-body" id="speci-body"><div style="font-size:11px;color:#94a2b4">watching for off-cycle special observations…</div></div>
 </div>
   <div class="panel-body" id="drift-body"></div>
@@ -2166,6 +2170,237 @@ async function fetchSpeci(force) {
   renderSpeci();
 }
 
+// =============================================================================
+// EDGE INSIGHTS — three engines that work on data already pulled:
+//  #2 Dew-point ceiling: physical cap on today's high from morning dew point
+//  #4 Divergence detector: KSEA vs neighbor-network expectation -> revert/momentum
+//  #6 Regime reliability: logs tool calls by weather regime, learns when to trust
+// =============================================================================
+
+// --- helpers ---
+function insightPacHour() {
+  try {
+    return parseFloat(new Date().toLocaleString("en-US",
+      { timeZone: TZ, hour12: false, hour: "numeric", minute: "numeric" })
+      .replace(/[^\d.:]/g, "").replace(":", "."));
+  } catch (e) { return new Date().getHours(); }
+}
+function todayKey() { return new Date().toLocaleDateString("en-CA", { timeZone: TZ }); }
+
+// Classify the current wind regime into a coarse bucket (used by reliability log)
+function windRegime(dir, mph) {
+  if (mph == null || mph < 3) return "calm";
+  if (dir == null) return "unknown";
+  const d = ((dir % 360) + 360) % 360;
+  if (d >= 180 && d <= 295) return "marine";       // S..WNW off the water
+  if (d >= 337.5 || d <= 100) return "offshore";   // NNW..E downslope/continental
+  return "transitional";
+}
+
+// ---------- #2 DEW-POINT CEILING ----------
+// Clear-day Tmax ceiling: with strong daytime mixing, the surface warms roughly
+// to the temperature where the dry adiabat from the morning mixing layer meets
+// the morning dewpoint-based moisture. A robust, well-known field approximation
+// for max afternoon T on a sunny day is driven by the early dew point:
+//   Tmax_F ~ dewF_morning + clearSkyGain, where gain depends on season/sun.
+// We calibrate gain conservatively for PacNW summer and shade it by cloud cover.
+function dewCeiling() {
+  const c = state.current;
+  if (!c || c.dewF == null) return null;
+  // Use the lowest dew point seen so far today as the "morning" air-mass moisture proxy
+  let dewMorn = c.dewF;
+  if (state.obsHistory && state.obsHistory.length) {
+    const tk = todayKey();
+    const todays = state.obsHistory.filter(r => r.time.toLocaleDateString("en-CA", { timeZone: TZ }) === tk && r.dewF != null);
+    if (todays.length) dewMorn = Math.min(...todays.map(r => r.dewF));
+  }
+  // Clear-sky gain over the air-mass dew point (PacNW summer, empirically ~ high 20s-30s F
+  // on the clearest dry days, less when humid or cloudy).
+  const month = new Date().getMonth(); // 0=Jan
+  const summer = (month >= 4 && month <= 8); // May-Sep
+  let gain = summer ? 33 : 24;
+  // humid air masses (high dewpoint) cap lower; very dry masses can exceed
+  if (dewMorn >= 60) gain -= 6;
+  else if (dewMorn <= 45) gain += 4;
+  // cloud shading
+  const cloud = c.cloud;
+  if (cloud != null) gain -= Math.min(12, cloud * 0.12); // up to -12F at full overcast
+  const ceil = dewMorn + gain;
+  return { ceilF: ceil, dewMorn, gain, cloud };
+}
+
+// ---------- #4 DIVERGENCE DETECTOR ----------
+// Compare KSEA's current temp to what the neighbor network predicts it "should"
+// be (median of neighbors + each one's learned offset, reusing Nowcast if present;
+// else a simple median of close-in stations). Large gap => revert or micro-front.
+function divergence() {
+  const c = state.current;
+  if (!c || c.tempF == null) return null;
+  // Prefer the Nowcast consensus if it's available and ready
+  let expected = null, nStations = 0, band = null;
+  try {
+    if (typeof ncEstimate === "function") {
+      const e = ncEstimate();
+      if (e && e.ready) { expected = e.est; nStations = e.votes.length; band = e.band; }
+    }
+  } catch (err) {}
+  // Fallback: raw median of fresh close-in synoptic neighbors (no offset)
+  if (expected == null) {
+    const stns = (state.synoptic && state.synoptic.stations) || [];
+    const now = Date.now();
+    const temps = stns.filter(s => s.tempF != null && s.time && (now - s.time.getTime()) / 60000 <= 25 && s.id !== "KSEA")
+                      .map(s => s.tempF).sort((a, b) => a - b);
+    if (temps.length >= 3) { expected = temps[Math.floor(temps.length / 2)]; nStations = temps.length; }
+  }
+  if (expected == null) return null;
+  const gap = c.tempF - expected;          // + = KSEA hotter than network
+  return { gap, expected, nStations, band, kseaF: c.tempF };
+}
+
+// ---------- #6 REGIME RELIABILITY ----------
+// Log the locked AI call + the regime it was made under; later grade vs settle.
+// Builds a per-regime hit-rate so we learn when the tools are trustworthy.
+const RELIABILITY_KEY = "ksea_reliability_v1";
+function loadReliability() { try { return JSON.parse(localStorage.getItem(RELIABILITY_KEY) || "{}"); } catch (e) { return {}; } }
+function saveReliability(o) { try { localStorage.setItem(RELIABILITY_KEY, JSON.stringify(o)); } catch (e) {} }
+
+// Record today's setup once (regime at decision time + the locked call)
+function reliabilityLogToday() {
+  const rec = loadReliability();
+  rec.days = rec.days || {};
+  const tk = todayKey();
+  const c = state.current;
+  const call = (typeof getLockedAICall === "function") ? getLockedAICall(state.selectedDate) : null;
+  if (!c || !call || !call.valid) return rec;
+  // Only stamp the regime once, around decision time, and only if not already stored graded
+  if (!rec.days[tk]) {
+    rec.days[tk] = {
+      regime: windRegime(c.windDir, c.windMph),
+      cloudBucket: c.cloud == null ? "?" : (c.cloud < 30 ? "clear" : c.cloud < 70 ? "mixed" : "cloudy"),
+      callLo: (function () {
+        const m = String(call.callLabel || "").match(/(\d+)/);
+        return m ? parseInt(m[1], 10) : (call.predHigh || null);
+      })(),
+      predHigh: call.predHigh != null ? call.predHigh : null,
+      settled: null, hit: null, err: null
+    };
+    saveReliability(rec);
+  }
+  return rec;
+}
+
+// Grade any past day against official settle (reuse the CLI officials map)
+function reliabilityGrade() {
+  const rec = loadReliability();
+  rec.days = rec.days || {};
+  let officials = {};
+  try { officials = (loadCLI().officials) || {}; } catch (e) {}
+  Object.keys(rec.days).forEach(d => {
+    const day = rec.days[d];
+    if (day.settled != null) return;
+    const o = officials[d];
+    if (o && typeof o.max === "number" && o.final) {
+      day.settled = o.max;
+      if (day.callLo != null) {
+        day.hit = (o.max >= day.callLo && o.max <= day.callLo + 1) ? 1 : 0;
+        day.err = day.predHigh != null ? +(day.predHigh - o.max).toFixed(1) : null;
+      }
+    }
+  });
+  saveReliability(rec);
+  return rec;
+}
+
+// Summaries by regime: hit-rate + mean abs error + bias, with sample counts
+function reliabilityByRegime() {
+  const rec = loadReliability();
+  const out = {};
+  Object.values(rec.days || {}).forEach(day => {
+    if (day.settled == null || day.hit == null) return;
+    const k = day.regime || "unknown";
+    (out[k] = out[k] || { n: 0, hits: 0, absErr: 0, bias: 0, nErr: 0 });
+    out[k].n++; out[k].hits += day.hit;
+    if (day.err != null) { out[k].absErr += Math.abs(day.err); out[k].bias += day.err; out[k].nErr++; }
+  });
+  Object.keys(out).forEach(k => {
+    const o = out[k];
+    o.hitRate = o.n ? o.hits / o.n : null;
+    o.mae = o.nErr ? o.absErr / o.nErr : null;
+    o.meanBias = o.nErr ? o.bias / o.nErr : null;
+  });
+  return out;
+}
+
+function renderInsights() {
+  const body = document.getElementById("insight-body");
+  const statusEl = document.getElementById("insight-status");
+  if (!body) return;
+  const isToday = state.days.length && state.selectedDate === state.days[0].date;
+  if (!isToday) { body.innerHTML = '<div style="font-size:11px;color:#94a2b4">Edge insights run on today\u2019s live view.</div>'; if (statusEl) statusEl.textContent = "\u2014"; return; }
+
+  reliabilityLogToday();
+  reliabilityGrade();
+
+  let html = "";
+  let statusBits = [];
+
+  // ---- #2 ceiling ----
+  const dc = dewCeiling();
+  if (dc) {
+    const proj = getDayProjection(state.selectedDate);
+    const projHigh = proj && proj.median != null ? proj.median : null;
+    const ceilRound = Math.round(dc.ceilF);
+    let note = "";
+    if (projHigh != null) {
+      if (projHigh > dc.ceilF + 1.5) note = ` \u26a0 projection (${projHigh.toFixed(0)}\u00b0) sits <b>above</b> this ceiling \u2014 upper brackets may be physically overpriced.`;
+      else if (projHigh < dc.ceilF - 3) note = ` Projection sits well under the ceiling \u2014 moisture isn\u2019t the limiting factor today.`;
+      else note = ` Projection is consistent with the ceiling.`;
+    }
+    html += `<div style="padding:7px 9px;background:rgba(245,158,11,0.07);border-left:2px solid #f59e0b;border-radius:4px;font-size:10.5px;line-height:1.55;color:#fde9c8">
+      \U0001f321\ufe0f <b>Dew-point ceiling \u2248 ${dc.ceilF.toFixed(0)}\u00b0F</b> (morning dew ${dc.dewMorn.toFixed(0)}\u00b0 + ${dc.gain.toFixed(0)}\u00b0 clear-air gain${dc.cloud != null ? `, cloud-adj` : ""}). On a day like this the high rarely clears ~${ceilRound}\u00b0 from moisture limits alone.${note}</div>`;
+    statusBits.push(`ceil ${ceilRound}\u00b0`);
+  }
+
+  // ---- #4 divergence ----
+  const dv = divergence();
+  if (dv) {
+    const ag = Math.abs(dv.gap);
+    let line, color;
+    if (ag < 1.2) { line = `KSEA (${dv.kseaF.toFixed(1)}\u00b0) is in line with the ${dv.nStations}-station network (${dv.expected.toFixed(1)}\u00b0). No divergence signal.`; color = "#94a2b4"; }
+    else {
+      const dirWord = dv.gap > 0 ? "hotter than" : "cooler than";
+      const lean = dv.gap > 0
+        ? `Either KSEA mean-reverts <b>down</b> toward the network soon, or a warm micro-pocket is real \u2014 watch the next obs.`
+        : `Either KSEA reverts <b>up</b> toward the network, or a cool push is arriving here first.`;
+      color = dv.gap > 0 ? "#f87171" : "#60a5fa";
+      line = `KSEA is <b>${ag.toFixed(1)}\u00b0 ${dirWord}</b> the ${dv.nStations}-station network expects (${dv.expected.toFixed(1)}\u00b0). ${lean}`;
+    }
+    html += `<div style="margin-top:8px;padding:7px 9px;background:rgba(96,165,250,0.06);border-left:2px solid ${color};border-radius:4px;font-size:10.5px;line-height:1.55;color:#cdd6e4">\u2696\ufe0f ${line}</div>`;
+    if (ag >= 1.2) statusBits.push(`div ${dv.gap > 0 ? "+" : ""}${dv.gap.toFixed(1)}\u00b0`);
+  }
+
+  // ---- #6 reliability (current regime) ----
+  const c = state.current;
+  const curRegime = c ? windRegime(c.windDir, c.windMph) : "unknown";
+  const byReg = reliabilityByRegime();
+  const here = byReg[curRegime];
+  const totalGraded = Object.values(byReg).reduce((s, o) => s + o.n, 0);
+  if (here && here.n >= 3) {
+    const hr = (here.hitRate * 100).toFixed(0);
+    const trust = here.hitRate >= 0.6 ? "trustworthy" : here.hitRate >= 0.4 ? "mixed" : "shaky";
+    const tcol = here.hitRate >= 0.6 ? "#34d399" : here.hitRate >= 0.4 ? "#f59e0b" : "#f87171";
+    html += `<div style="margin-top:8px;padding:7px 9px;background:rgba(167,139,250,0.07);border-left:2px solid #a78bfa;border-radius:4px;font-size:10.5px;line-height:1.55;color:#ddd6fe">
+      \U0001f9ed Today\u2019s regime: <b>${curRegime}</b>. Your locked calls here have hit <b style="color:${tcol}">${hr}% (${here.hits}/${here.n})</b>${here.mae != null ? `, MAE ${here.mae.toFixed(1)}\u00b0` : ""}${here.meanBias != null ? `, bias ${here.meanBias >= 0 ? "+" : ""}${here.meanBias.toFixed(1)}\u00b0` : ""} \u2014 tools look <b style="color:${tcol}">${trust}</b> in this regime${here.n < 8 ? " (small sample, growing)" : ""}.</div>`;
+    statusBits.push(`${curRegime} ${hr}%`);
+  } else {
+    html += `<div style="margin-top:8px;padding:7px 9px;background:rgba(167,139,250,0.05);border-left:2px solid #6b5fa0;border-radius:4px;font-size:10px;line-height:1.5;color:#b9b1d6">
+      \U0001f9ed Today\u2019s regime: <b>${curRegime}</b>. Reliability for this regime needs \u22653 graded days (have ${here ? here.n : 0}; ${totalGraded} total logged). It learns automatically as official settles come in \u2014 trust grows with n.</div>`;
+  }
+
+  body.innerHTML = html || '<div style="font-size:11px;color:#94a2b4">No insights available yet.</div>';
+  if (statusEl) { statusEl.textContent = statusBits.length ? statusBits.join(" \u00b7 ") : "live"; statusEl.style.color = "#a78bfa"; }
+}
+
 function renderSpeci() {
   const body = document.getElementById("speci-body");
   const statusEl = document.getElementById("speci-status");
@@ -3219,6 +3454,7 @@ function renderAll() {
   renderNowcast();
   renderPace();
   renderSpeci();
+  renderInsights();
   renderSkycams();
   renderBuckets();
   renderChart();
