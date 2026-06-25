@@ -985,6 +985,82 @@ function bucketProbsFromSamples(samples, buckets) {
   return counts.map(c => c / total);
 }
 
+// =============================================================================
+// OBSERVED-CLIMB PROJECTION
+// The stale ensemble forecast is the WORST predictor of today's high once the day
+// is underway. This projects the high from the ACTUAL observed morning trajectory:
+//   - fits the recent climb rate from real obs
+//   - projects it forward along the diurnal curve to the expected peak hour
+//   - blends with the ensemble by how much of the heating day has elapsed
+//     (early morning: trust ensemble; midday: trust the live climb)
+// Returns { projF, method, blend, climbRate, highSoFar } or null if no obs yet.
+// =============================================================================
+function observedClimbProjection(date, ensembleMedianF, peakHourMed) {
+  // only meaningful for today
+  if (!state.days.length || date !== state.days[0].date) return null;
+  if (!state.obsHistory || !state.obsHistory.length) return null;
+  const tk = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  const obs = state.obsHistory
+    .filter(r => r.time.toLocaleDateString("en-CA", { timeZone: TZ }) === tk && r.tempF != null)
+    .sort((a, b) => a.time - b.time);
+  if (obs.length < 3) return null;  // need a few points to fit a climb
+
+  const hourOf = r => r.time.getHours() + r.time.getMinutes() / 60;
+  const nowH = (function () {
+    try { return parseFloat(new Date().toLocaleString("en-US", { timeZone: TZ, hour12: false, hour: "2-digit", minute: "2-digit" }).replace(":", ".")); }
+    catch (e) { return obs.length ? hourOf(obs[obs.length - 1]) : 12; }
+  })();
+
+  const highSoFar = Math.max(...obs.map(r => r.tempF));
+  const cur = obs[obs.length - 1].tempF;
+  const peakHour = (peakHourMed != null && peakHourMed > 12 && peakHourMed < 19) ? peakHourMed : 15.5;
+
+  // --- if we're already at/after peak, the high is essentially in ---
+  if (nowH >= peakHour - 0.25) {
+    // high is highSoFar (maybe +tiny if still nudging up); near-certain
+    return { projF: highSoFar, method: "high in (past peak)", blend: 1, climbRate: 0, highSoFar, nowH, peakHour };
+  }
+
+  // --- fit recent climb rate (°F/hr) from the last ~90 min of obs ---
+  const recent = obs.filter(r => hourOf(r) >= nowH - 1.5);
+  const fitPts = recent.length >= 3 ? recent : obs.slice(-4);
+  // least-squares slope of tempF vs hour
+  const xs = fitPts.map(hourOf), ys = fitPts.map(r => r.tempF);
+  const n = xs.length, sx = xs.reduce((a, b) => a + b, 0), sy = ys.reduce((a, b) => a + b, 0);
+  const sxx = xs.reduce((a, b) => a + b * b, 0), sxy = xs.reduce((a, b, i) => a + b * ys[i], 0);
+  const denom = n * sxx - sx * sx;
+  let rate = denom !== 0 ? (n * sxy - sx * sy) / denom : 0;
+  rate = Math.max(0, rate); // temps shouldn't be projected to fall during heating
+
+  // --- project forward along a decelerating diurnal curve to the peak ---
+  // Remaining rise isn't linear — heating decelerates as it approaches peak.
+  // Model remaining gain as the linear rate applied over an EFFECTIVE remaining
+  // time that shrinks via a sine roll-off (matches how afternoons flatten).
+  const hoursToPeak = Math.max(0, peakHour - nowH);
+  // effective fraction of the linear projection that actually materializes (0..1),
+  // declines as we near peak: at 3h out ~0.8, at 1h out ~0.45, at 0.5h ~0.25
+  const decel = Math.sin(Math.min(1, hoursToPeak / 3.2) * Math.PI / 2);
+  const projectedRise = rate * hoursToPeak * decel;
+  let climbProj = cur + projectedRise;
+  // never below what we've already observed
+  climbProj = Math.max(climbProj, highSoFar);
+
+  // --- blend with the ensemble by how much heating day has elapsed ---
+  // Before ~9am: almost all ensemble (no real signal yet).
+  // By early afternoon: mostly the live climb.
+  const heatStart = 6;
+  const dayFrac = Math.max(0, Math.min(1, (nowH - heatStart) / (peakHour - heatStart)));
+  // weight on the observed climb grows with dayFrac, but cap so ensemble always has a small voice
+  const wClimb = Math.min(0.85, dayFrac * dayFrac * 1.1);
+  const emed = (ensembleMedianF != null && isFinite(ensembleMedianF)) ? ensembleMedianF : climbProj;
+  const blended = wClimb * climbProj + (1 - wClimb) * emed;
+
+  return {
+    projF: blended, method: "observed climb \u00d7 ensemble", blend: wClimb,
+    climbRate: rate, climbProj, ensembleMedianF: emed, highSoFar, cur, nowH, peakHour, dayFrac
+  };
+}
+
 function getDayProjection(date) {
   const ens = state.ensembleDays[date];
   const day = state.days.find(d => d.date === date);
@@ -1035,14 +1111,39 @@ function getDayProjection(date) {
   const peakLo = peakSorted.length ? quantile(peakSorted, 0.10) : null;
   const peakHi = peakSorted.length ? quantile(peakSorted, 0.90) : null;
 
-  // buckets centered on the calibrated median, probabilities from the same samples
-  const buckets = generateBuckets(median);
-  const probs = bucketProbsFromSamples(samples, buckets);
+  // ---- OBSERVED-CLIMB OVERRIDE ----
+  // Once today is underway, re-anchor the median to the live climb (blended with
+  // the ensemble). This is the single biggest accuracy gain: a forecast made
+  // yesterday is the worst predictor of today's high once we can watch it climb.
+  let effMedian = median, climbInfo = null;
+  const oc = observedClimbProjection(date, median, peakMed);
+  if (oc) {
+    effMedian = oc.projF;
+    climbInfo = oc;
+    // shrink the predictive spread as the day progresses and we gain certainty
+    // (more elapsed heating + already-high floor => tighter band)
+    const tighten = 1 - 0.55 * (oc.dayFrac != null ? oc.dayFrac : 0);
+    kernelStd = Math.max(CALIB.kernelFloorF, kernelStd * tighten);
+  }
+
+  // rebuild the predictive distribution around the EFFECTIVE median when overridden
+  let finalSamples = samples, fMed = median, fP10 = p10, fP90 = p90;
+  if (climbInfo) {
+    const shift = effMedian - median;
+    finalSamples = samples.map(v => v + shift);
+    const fSorted = finalSamples.slice().sort((a, b) => a - b);
+    fMed = quantile(fSorted, 0.5); fP10 = quantile(fSorted, 0.10); fP90 = quantile(fSorted, 0.90);
+  }
+
+  // buckets centered on the EFFECTIVE median, probabilities from the (shifted) samples
+  const buckets = generateBuckets(fMed);
+  const probs = bucketProbsFromSamples(finalSamples, buckets);
 
   return {
-    median, p10, p90, peakMed, peakLo, peakHi, probs, buckets,
+    median: fMed, p10: fP10, p90: fP90, peakMed, peakLo, peakHi, probs, buckets,
     nMembers: maxes.length,
     rawMedian, rawP10, rawP90, calInfo, calibrated: CALIB.enabled,
+    ensembleMedian: median, climbInfo,   // expose both so UI can show the shift
   };
 }
 
