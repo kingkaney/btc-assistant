@@ -183,6 +183,10 @@
   <div class="panel-head"><span>🚨 SPECI Watch</span><span class="accent" id="speci-status">—</span></div>
 <div class="panel" id="insight-panel">
   <div class="panel-head"><span>🧠 Edge Insights</span><span class="accent" id="insight-status">—</span></div>
+<div class="panel" id="sixhr-panel">
+  <div class="panel-head"><span>📊 6-Hour Max</span><span class="accent" id="sixhr-status">—</span></div>
+  <div class="panel-body" id="sixhr-body"><div style="font-size:11px;color:#94a2b4">waiting for the synoptic 6-hour max report…</div></div>
+</div>
   <div class="panel-body" id="insight-body"><div style="font-size:11px;color:#94a2b4">computing ceiling, divergence, reliability…</div></div>
 </div>
   <div class="panel-body" id="speci-body"><div style="font-size:11px;color:#94a2b4">watching for off-cycle special observations…</div></div>
@@ -2573,6 +2577,25 @@ async function fetchSixHour(force) {
     const cut = new Date(now - 21 * 86400 * 1000).toISOString();
     Object.keys(cache.entries).forEach(k => { if (k < cut) delete cache.entries[k]; });
     Object.keys(cache.tgroups).forEach(k => { if (k < cut) delete cache.tgroups[k]; });
+
+    // --- ALERT: a new 6-hour max group just posted (the moment it uploads) ---
+    // find the newest 6-hr entry; if its timestamp is one we haven't announced, fire.
+    let newestK = null;
+    Object.keys(cache.entries).forEach(k => { if (!newestK || k > newestK) newestK = k; });
+    if (newestK && cache.lastAlerted6hr !== newestK) {
+      // only announce entries that are actually fresh (posted within the last ~40 min),
+      // so we don't fire on old data when the app first loads
+      const ageMin = (now - Date.parse(newestK)) / 60000;
+      if (cache.lastAlerted6hr !== undefined && ageMin <= 40) {
+        const e = cache.entries[newestK];
+        const tStr = new Date(newestK).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+        const msg = `📊 KSEA 6-HOUR MAX posted: ${e.f.toFixed(1)}°F (${e.c.toFixed(1)}°C) — precise period high @ ${tStr}`;
+        if (typeof pushAlert === "function") { try { pushAlert(msg); } catch (e) {} }
+        else if (typeof addAlert === "function") { try { addAlert(msg); } catch (e) {} }
+        cache.banner6hr = msg;
+      }
+      cache.lastAlerted6hr = newestK;
+    }
     cache.error = null;
   } catch (e) {
     cache.error = String((e && e.message) || e);
@@ -2580,7 +2603,64 @@ async function fetchSixHour(force) {
   saveSixHr(cache);
   renderScorecard();
   if (typeof renderProjection === "function") try { renderProjection(); } catch (e) {}
+  try { renderSixHr(); } catch (e) {}
   refreshAutoPeeks();
+}
+
+function renderSixHr() {
+  const body = document.getElementById("sixhr-body");
+  const statusEl = document.getElementById("sixhr-status");
+  if (!body) return;
+  const cache = loadSixHr();
+  const fmt = t => new Date(t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+  const fmtDay = t => new Date(t).toLocaleDateString("en-US", { timeZone: TZ, month: "short", day: "numeric" });
+
+  if (cache.error && !(cache.entries && Object.keys(cache.entries).length)) {
+    body.innerHTML = `<div style="font-size:11px;color:#f87171">6-hour feed error: ${cache.error}</div>`;
+    if (statusEl) { statusEl.textContent = "error"; statusEl.style.color = "#f87171"; }
+    return;
+  }
+
+  const today = sixHrToday();   // today's best 6-hr max (precise tenths) or null
+  let html = "";
+
+  if (today) {
+    html += `<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+      <div style="font-size:24px;font-weight:700;color:#a7f3d0">${today.f.toFixed(1)}°F</div>
+      <div style="font-size:11px;color:#94a2b4">${today.c.toFixed(1)}°C · precise 6-hr period max · posted ${fmt(today.t)}</div></div>
+    <div style="margin-top:6px;font-size:10px;color:#7e8ea4">This is the official-grade period high in tenths — it resolves the whole-°C ambiguity and previews what CLISEA will settle tonight.</div>`;
+  } else {
+    // figure out when the next 6-hr report is due (00/06/12/18 Z)
+    const nowMs = Date.now();
+    const synZ = [0, 6, 12, 18];
+    const d = new Date();
+    const hUTC = d.getUTCHours();
+    let nextZ = synZ.find(z => z > hUTC);
+    let dueLabel;
+    if (nextZ == null) { nextZ = 0; }
+    const nd = new Date(d); nd.setUTCHours(nextZ, 53, 0, 0);
+    if (nd.getTime() <= nowMs) nd.setUTCDate(nd.getUTCDate() + 1);
+    dueLabel = nd.toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+    html += `<div style="font-size:12px;color:#cdd6e4">No 6-hour max posted yet today.</div>
+      <div style="margin-top:6px;font-size:10.5px;color:#94a2b4">The 6-hour max transmits only at synoptic hours (5 AM, 11 AM, 5 PM, 11 PM PT). The afternoon report (~5 PM) captures the day’s peak. Next report due ~<b style="color:#eef3fa">${dueLabel}</b> — you’ll get an alert the moment it posts.</div>`;
+  }
+
+  // recent history (last few 6-hr maxes across days)
+  const entries = cache.entries || {};
+  const keys = Object.keys(entries).sort().reverse().slice(0, 5);
+  if (keys.length) {
+    html += `<div style="margin-top:9px;font-size:9.5px;color:#5d6c81">recent 6-hr maxes:</div><div style="font-size:10px;color:#cdd6e4;line-height:1.7;margin-top:2px">`;
+    keys.forEach(k => {
+      html += `${fmtDay(Date.parse(k))} ${fmt(Date.parse(k))} · <b>${entries[k].f.toFixed(1)}°F</b> (${entries[k].c.toFixed(1)}°C)<br>`;
+    });
+    html += `</div>`;
+  }
+
+  body.innerHTML = html;
+  if (statusEl) {
+    if (today) { statusEl.textContent = `${today.f.toFixed(0)}° today`; statusEl.style.color = "#34d399"; }
+    else { statusEl.textContent = "pending"; statusEl.style.color = "#94a2b4"; }
+  }
 }
 
 // Today's best 6-hr precise max (current climate day), or null
@@ -3556,6 +3636,7 @@ function renderAll() {
   renderPace();
   renderSpeci();
   renderInsights();
+  renderSixHr();
   renderSkycams();
   renderBuckets();
   renderChart();
