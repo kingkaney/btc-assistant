@@ -2621,6 +2621,23 @@ function renderSixHr() {
     return;
   }
 
+  // ---- DEBUG READOUT (temporary) ----
+  let dbg = "";
+  try {
+    const ent = cache.entries || {};
+    const allK = Object.keys(ent).sort();
+    const lastFetchAgo = cache.lastFetch ? Math.round((Date.now() - cache.lastFetch) / 60000) : "never";
+    dbg = `<div style="font-size:9px;color:#fbbf24;background:#1a1a2e;padding:6px;border-radius:4px;margin-bottom:8px;line-height:1.5;font-family:monospace">
+      DEBUG: last fetch ${lastFetchAgo} min ago · ${allK.length} 6-hr entries total<br>`;
+    allK.slice(-4).forEach(k => {
+      const d = new Date(Date.parse(k));
+      const z = d.getUTCHours();
+      dbg += `&nbsp;${k.slice(5,16)} (${z}Z) = ${ent[k].f.toFixed(1)}°F<br>`;
+    });
+    if (cache.error) dbg += `&nbsp;<span style="color:#f87171">last error: ${cache.error}</span><br>`;
+    dbg += `<a href="#" onclick="(async()=>{await fetchSixHour(true);renderSixHr();})();return false" style="color:#60a5fa">→ force refresh now</a> · <a href="#" onclick="localStorage.removeItem('ksea_sixhr_v1');location.reload();return false" style="color:#f87171">→ clear cache + reload</a></div>`;
+  } catch(e) { dbg = `<div style="font-size:9px;color:#f87171">debug err: ${e}</div>`; }
+
   // newest 6-hr entry today (most recently posted window) + the day's highest window
   const entriesAll = cache.entries || {};
   const todayK = climateDayOfUTC(Date.now());
@@ -2671,7 +2688,7 @@ function renderSixHr() {
     html += `</div>`;
   }
 
-  body.innerHTML = html;
+  body.innerHTML = dbg + html;
   if (statusEl) {
     if (latest) { statusEl.textContent = `${latest.f.toFixed(0)}° latest`; statusEl.style.color = "#34d399"; }
     else { statusEl.textContent = "pending"; statusEl.style.color = "#94a2b4"; }
