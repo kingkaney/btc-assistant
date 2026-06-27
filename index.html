@@ -2621,14 +2621,29 @@ function renderSixHr() {
     return;
   }
 
-  const today = sixHrToday();   // today's best 6-hr max (precise tenths) or null
+  // newest 6-hr entry today (most recently posted window) + the day's highest window
+  const entriesAll = cache.entries || {};
+  const todayK = climateDayOfUTC(Date.now());
+  const todays = Object.keys(entriesAll).filter(k => climateDayOfUTC(Date.parse(k)) === todayK).sort();
+  const latest = todays.length ? Object.assign({ t: Date.parse(todays[todays.length-1]) }, entriesAll[todays[todays.length-1]]) : null;
+  const today = sixHrToday();   // today's HIGHEST 6-hr max across windows
   let html = "";
 
-  if (today) {
+  if (latest) {
+    const endUTC = new Date(latest.t).getUTCHours();
+    let winLabel = "6-hr period";
+    if (endUTC === 0 || endUTC === 23) winLabel = "5 PM–11 PM (evening)";
+    else if (endUTC === 6 || endUTC === 5) winLabel = "11 PM–5 AM (overnight)";
+    else if (endUTC === 12 || endUTC === 11) winLabel = "5 AM–11 AM (morning)";
+    else if (endUTC === 18 || endUTC === 17) winLabel = "11 AM–5 PM (afternoon — the day's peak window)";
     html += `<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
-      <div style="font-size:24px;font-weight:700;color:#a7f3d0">${today.f.toFixed(1)}°F</div>
-      <div style="font-size:11px;color:#94a2b4">${today.c.toFixed(1)}°C · precise 6-hr period max · posted ${fmt(today.t)}</div></div>
-    <div style="margin-top:6px;font-size:10px;color:#7e8ea4">This is the official-grade period high in tenths — it resolves the whole-°C ambiguity and previews what CLISEA will settle tonight.</div>`;
+      <div style="font-size:24px;font-weight:700;color:#a7f3d0">${latest.f.toFixed(1)}°F</div>
+      <div style="font-size:11px;color:#94a2b4">${latest.c.toFixed(1)}°C · latest report · posted ${fmt(latest.t)}</div></div>
+    <div style="margin-top:4px;font-size:10px;color:#fbbf24">⭐ covers: <b>${winLabel}</b></div>`;
+    if (today && Math.abs(today.f - latest.f) > 0.05 && today.t !== latest.t) {
+      html += `<div style="margin-top:5px;font-size:10.5px;color:#a7f3d0">Day's highest 6-hr max so far: <b>${today.f.toFixed(1)}°F</b> (posted ${fmt(today.t)})</div>`;
+    }
+    html += `<div style="margin-top:6px;font-size:10px;color:#7e8ea4">Precise tenths — resolves the whole-°C ambiguity. The afternoon (11 AM–5 PM) window previews tonight's CLISEA settle.</div>`;
   } else {
     // figure out when the next 6-hr report is due (00/06/12/18 Z)
     const nowMs = Date.now();
@@ -2658,7 +2673,7 @@ function renderSixHr() {
 
   body.innerHTML = html;
   if (statusEl) {
-    if (today) { statusEl.textContent = `${today.f.toFixed(0)}° today`; statusEl.style.color = "#34d399"; }
+    if (latest) { statusEl.textContent = `${latest.f.toFixed(0)}° latest`; statusEl.style.color = "#34d399"; }
     else { statusEl.textContent = "pending"; statusEl.style.color = "#94a2b4"; }
   }
 }
