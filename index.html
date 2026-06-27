@@ -2621,22 +2621,6 @@ function renderSixHr() {
     return;
   }
 
-  // ---- DEBUG READOUT (temporary) ----
-  let dbg = "";
-  try {
-    const ent = cache.entries || {};
-    const allK = Object.keys(ent).sort();
-    const lastFetchAgo = cache.lastFetch ? Math.round((Date.now() - cache.lastFetch) / 60000) : "never";
-    dbg = `<div style="font-size:9px;color:#fbbf24;background:#1a1a2e;padding:6px;border-radius:4px;margin-bottom:8px;line-height:1.5;font-family:monospace">
-      DEBUG: last fetch ${lastFetchAgo} min ago · ${allK.length} 6-hr entries total<br>`;
-    allK.slice(-4).forEach(k => {
-      const d = new Date(Date.parse(k));
-      const z = d.getUTCHours();
-      dbg += `&nbsp;${k.slice(5,16)} (${z}Z) = ${ent[k].f.toFixed(1)}°F<br>`;
-    });
-    if (cache.error) dbg += `&nbsp;<span style="color:#f87171">last error: ${cache.error}</span><br>`;
-    dbg += `<a href="#" onclick="(async()=>{await fetchSixHour(true);renderSixHr();})();return false" style="color:#60a5fa">→ force refresh now</a> · <a href="#" onclick="localStorage.removeItem('ksea_sixhr_v1');location.reload();return false" style="color:#f87171">→ clear cache + reload</a></div>`;
-  } catch(e) { dbg = `<div style="font-size:9px;color:#f87171">debug err: ${e}</div>`; }
 
   // newest 6-hr entry today (most recently posted window) + the day's highest window
   const entriesAll = cache.entries || {};
@@ -2647,12 +2631,18 @@ function renderSixHr() {
   let html = "";
 
   if (latest) {
-    const endUTC = new Date(latest.t).getUTCHours();
+    // Label by the PDT clock hour the report posted at. NWS posts each 6-hr period
+    // max in the synoptic ob at the END of the window (reported ~:53 before the hour):
+    //   ~4:53 PM (23Z) report -> covers 11 AM–5 PM  (afternoon, the day's peak)
+    //   ~10:53 PM (05Z)        -> covers 5 PM–11 PM   (evening)
+    //   ~4:53 AM (11Z)         -> covers 11 PM–5 AM   (overnight)
+    //   ~10:53 AM (17Z)        -> covers 5 AM–11 AM   (morning)
+    const pdtHour = parseInt(new Date(latest.t).toLocaleString("en-US", { timeZone: TZ, hour: "2-digit", hour12: false }), 10);
     let winLabel = "6-hr period";
-    if (endUTC === 0 || endUTC === 23) winLabel = "5 PM–11 PM (evening)";
-    else if (endUTC === 6 || endUTC === 5) winLabel = "11 PM–5 AM (overnight)";
-    else if (endUTC === 12 || endUTC === 11) winLabel = "5 AM–11 AM (morning)";
-    else if (endUTC === 18 || endUTC === 17) winLabel = "11 AM–5 PM (afternoon — the day's peak window)";
+    if (pdtHour >= 15 && pdtHour <= 18) winLabel = "11 AM–5 PM (afternoon — the day's peak window)";
+    else if (pdtHour >= 21 || pdtHour <= 0) winLabel = "5 PM–11 PM (evening)";
+    else if (pdtHour >= 3 && pdtHour <= 6) winLabel = "11 PM–5 AM (overnight)";
+    else if (pdtHour >= 9 && pdtHour <= 12) winLabel = "5 AM–11 AM (morning)";
     html += `<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
       <div style="font-size:24px;font-weight:700;color:#a7f3d0">${latest.f.toFixed(1)}°F</div>
       <div style="font-size:11px;color:#94a2b4">${latest.c.toFixed(1)}°C · latest report · posted ${fmt(latest.t)}</div></div>
@@ -2688,7 +2678,7 @@ function renderSixHr() {
     html += `</div>`;
   }
 
-  body.innerHTML = dbg + html;
+  body.innerHTML = html;
   if (statusEl) {
     if (latest) { statusEl.textContent = `${latest.f.toFixed(0)}° latest`; statusEl.style.color = "#34d399"; }
     else { statusEl.textContent = "pending"; statusEl.style.color = "#94a2b4"; }
