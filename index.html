@@ -2263,8 +2263,7 @@ async function fetchSpeci(force) {
       cache.lastAlertedSpeci = newest.t;
       const tStr = new Date(newest.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
       const msg = `\U0001f6a8 KSEA SPECI ${newest.tf.toFixed(1)}\u00b0F (${newest.tc.toFixed(1)}\u00b0C) \u2014 settles ${Math.round(newest.tf)}\u00b0, off-cycle @ ${tStr}`;
-      if (typeof pushAlert === "function") { try { pushAlert(msg); } catch (e) {} }
-      else if (typeof addAlert === "function") { try { addAlert(msg); } catch (e) {} }
+      try { if (typeof alertsEnabled !== "function" || alertsEnabled()) triggerAlert("SPECI", msg); } catch (e) {}
       cache.banner = msg;
     }
     cache.error = null;
@@ -2557,23 +2556,59 @@ async function fetchSixHour(force) {
   const now = Date.now();
   if (!force && cache.lastFetch && now - cache.lastFetch < 18 * 60 * 1000) { return; }
   cache.lastFetch = now; saveSixHr(cache);
+  cache.entries = cache.entries || {};
+  cache.tgroups = cache.tgroups || {};
+  let gotData = false;
+
+  // PRIMARY: aviationweather.gov — fast (minutes, no QC delay), via CORS proxy.
+  // This is the FAST feed; api.weather.gov lags 20-45min for QC. We want speed.
   try {
-    const r = await fetch("https://api.weather.gov/stations/KSEA/observations?limit=40");
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const j = await r.json();
-    cache.entries = cache.entries || {};
-    cache.tgroups = cache.tgroups || {};
-    (j.features || []).forEach(ft => {
-      const p = ft.properties || {};
-      const g = parseSixHrGroup(p.rawMessage || "");
-      if (g && p.timestamp) cache.entries[p.timestamp] = g;
-      let t = parseTGroup(p.rawMessage || "");
-      if (!t && p.temperature && p.temperature.value != null) {     // API precise °C fallback
-        const c = p.temperature.value;
-        if (c > -45 && c < 55) t = { c: +c.toFixed(1), f: +(c * 9 / 5 + 32).toFixed(1) };
-      }
-      if (t && p.timestamp) cache.tgroups[p.timestamp] = t;
+    const avRaw = "https://aviationweather.gov/api/data/metar?ids=KSEA&format=json&hours=8&taf=false";
+    const proxied = "https://corsproxy.io/?url=" + encodeURIComponent(avRaw);
+    const r = await fetch(proxied);
+    if (!r.ok) throw new Error("proxy HTTP " + r.status);
+    const arr = await r.json();
+    (arr || []).forEach(o => {
+      const raw = o.rawOb || o.rawMessage || "";
+      if (!raw) return;
+      // obsTime is unix seconds; build an ISO key
+      const ms = o.obsTime ? o.obsTime * 1000 : (o.reportTime ? Date.parse(o.reportTime + "Z") : NaN);
+      if (!isFinite(ms)) return;
+      const iso = new Date(ms).toISOString().replace(/\.\d{3}Z$/, "+00:00");
+      const g = parseSixHrGroup(raw);
+      if (g) cache.entries[iso] = g;
+      let t = parseTGroup(raw);
+      if (!t && typeof o.temp === "number" && o.temp > -45 && o.temp < 55) t = { c: +o.temp.toFixed(1), f: +(o.temp * 9 / 5 + 32).toFixed(1) };
+      if (t) cache.tgroups[iso] = t;
+      gotData = true;
     });
+  } catch (e) {
+    cache.proxyErr = String((e && e.message) || e);
+  }
+
+  // FALLBACK: api.weather.gov (slower, QC-delayed) only if the fast feed failed.
+  try {
+    if (!gotData) {
+      const r = await fetch("https://api.weather.gov/stations/KSEA/observations?limit=40");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      (j.features || []).forEach(ft => {
+        const p = ft.properties || {};
+        const g = parseSixHrGroup(p.rawMessage || "");
+        if (g && p.timestamp) cache.entries[p.timestamp] = g;
+        let t = parseTGroup(p.rawMessage || "");
+        if (!t && p.temperature && p.temperature.value != null) {
+          const c = p.temperature.value;
+          if (c > -45 && c < 55) t = { c: +c.toFixed(1), f: +(c * 9 / 5 + 32).toFixed(1) };
+        }
+        if (t && p.timestamp) cache.tgroups[p.timestamp] = t;
+      });
+      gotData = true;
+    }
+  } catch (e) {
+    if (!gotData) throw e;
+  }
+  try {
     const cut = new Date(now - 21 * 86400 * 1000).toISOString();
     Object.keys(cache.entries).forEach(k => { if (k < cut) delete cache.entries[k]; });
     Object.keys(cache.tgroups).forEach(k => { if (k < cut) delete cache.tgroups[k]; });
@@ -2590,8 +2625,7 @@ async function fetchSixHour(force) {
         const e = cache.entries[newestK];
         const tStr = new Date(newestK).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
         const msg = `📊 KSEA 6-HOUR MAX posted: ${e.f.toFixed(1)}°F (${e.c.toFixed(1)}°C) — precise period high @ ${tStr}`;
-        if (typeof pushAlert === "function") { try { pushAlert(msg); } catch (e) {} }
-        else if (typeof addAlert === "function") { try { addAlert(msg); } catch (e) {} }
+        try { if (typeof alertsEnabled !== "function" || alertsEnabled()) triggerAlert("6-Hour Max", msg); } catch (e) {}
         cache.banner6hr = msg;
       }
       cache.lastAlerted6hr = newestK;
