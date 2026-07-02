@@ -194,6 +194,12 @@
   <div class="panel-body" id="drift-body"></div>
 </div>
 
+<!-- SETTLEMENT FLOOR: one-way ratchet from settlement-grade lanes only -->
+<div class="panel" id="floor-panel">
+  <div class="panel-head"><span>⛓ Settlement Floor</span><span class="accent" id="floor-status">—</span></div>
+  <div class="panel-body" id="floor-body"><div style="font-size:11px;color:#94a2b4">waiting for the first settlement-grade ob of the climate day…</div></div>
+</div>
+
 <!-- PACE: today's climb, observed vs required rate, over/under verdict -->
 <div class="panel" id="pace-panel">
   <div class="panel-head"><span>⏱ Pace</span><span class="accent" id="pace-status">—</span></div>
@@ -2184,6 +2190,7 @@ async function fetchCLI(force) {
   }
   saveCLI(cache);
   renderScorecard();
+  try { renderFloor(); } catch (e) {}
   refreshAutoPeeks();
 }
 
@@ -2272,6 +2279,7 @@ async function fetchSpeci(force) {
   }
   saveSpeci(cache);
   renderSpeci();
+  try { renderFloor(); } catch (e) {}
 }
 
 // =============================================================================
@@ -2638,6 +2646,7 @@ async function fetchSixHour(force) {
   renderScorecard();
   if (typeof renderProjection === "function") try { renderProjection(); } catch (e) {}
   try { renderSixHr(); } catch (e) {}
+  try { renderFloor(); } catch (e) {}
   refreshAutoPeeks();
 }
 
@@ -2777,6 +2786,157 @@ function sixHrHintHtml() {
   if (!s) return "";
   const tStr = new Date(s.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
   return `<div style="margin-top:6px;padding:7px 9px;background:rgba(52,211,153,0.08);border-left:2px solid #34d399;border-radius:4px;font-size:9px;line-height:1.5;color:#a7f3d0">✓ Precise lane (${s.src}, ${tStr}): <b>${s.c.toFixed(1)}°C = ${s.f.toFixed(1)}°F</b> → settle floor <b>${Math.round(s.f)}°</b>.</div>`;
+}
+
+// =============================================================================
+// SETTLEMENT FLOOR — the one-way ratchet.
+// Settle = round(day's max tenths). Once a tenth prints, the settle can never
+// come back below round(it). Sources are settlement-grade ONLY: hourly/SPECI
+// T-groups + day-safe 6-hr max groups + CLI. The 1-min display is deliberately
+// excluded (whole-°C rounded; read 63° on Jun 30 while the T-group max was
+// 62.1°F → settled 62).
+// =============================================================================
+const FLOOR_KEY = "ksea_floor_v1";
+function loadFloor() { try { return JSON.parse(localStorage.getItem(FLOOR_KEY) || "{}"); } catch (e) { return {}; } }
+function saveFloor(o) { try { localStorage.setItem(FLOOR_KEY, JSON.stringify(o)); } catch (e) {} }
+
+// Max settlement-grade tenths ob for today's climate day, scanning BOTH caches:
+// sixHr.tgroups (aviationweather fast lane, ~20 min) and speci.obs (45s lane) —
+// so a SPECI ratchets the floor within a minute of posting.
+function floorTenthsMax() {
+  const today = climateDayOfUTC(Date.now());
+  let best = null;
+  const take = (ms, c, f, src) => {
+    if (!isFinite(ms) || climateDayOfUTC(ms) !== today) return;
+    if (typeof f !== "number" || !(f > -50 && f < 130)) return;
+    if (!best || f > best.f) best = { t: ms, c, f, src };
+  };
+  const tg = (loadSixHr().tgroups) || {};
+  Object.keys(tg).forEach(k => take(Date.parse(k), tg[k].c, tg[k].f, "hourly T-group"));
+  const so = (loadSpeci().obs) || {};
+  Object.keys(so).forEach(k => {
+    const o = so[k];
+    take(o.t || Date.parse(k), o.tc, o.tf, o.isSpeci ? "SPECI T-group" : "hourly T-group");
+  });
+  // 6-hr max groups: only reports posted after 8 AM local — the overnight
+  // window (05–11Z) reaches back across the 08Z climate-day boundary into
+  // yesterday, so a warm late evening there would fake today's floor high.
+  const entries = (loadSixHr().entries) || {};
+  Object.keys(entries).forEach(k => {
+    const ms = Date.parse(k);
+    if (!isFinite(ms)) return;
+    const pdtH = parseInt(new Date(ms).toLocaleString("en-US", { timeZone: TZ, hour: "2-digit", hour12: false }), 10);
+    if (pdtH < 8) return;
+    take(ms, entries[k].c, entries[k].f, "6-hr max group");
+  });
+  return best;
+}
+
+// Full floor: tenths lanes fused with official CLI (already whole-°F, authoritative).
+function settlementFloor() {
+  const tm = floorTenthsMax();
+  let floor = tm ? Math.round(tm.f) : null;
+  let src = tm ? tm.src : null;
+  try {
+    const off = loadCLI().officials || {};
+    const o = off[pacificNowParts().date];
+    if (o && typeof o.max === "number" && (floor == null || o.max > floor)) {
+      floor = o.max; src = o.final ? "official CLI" : "afternoon CLI";
+    }
+  } catch (e) {}
+  if (floor == null) return null;
+  return { floor, src, tenths: tm };
+}
+
+// Smallest tenth °C whose °F conversion (computed EXACTLY like the rest of the
+// app: toFixed(1) then Math.round) settles floor+1. Searched, not divided, so
+// float noise can't shift the seam.
+function flipThresholdC(floor) {
+  const start = Math.floor((((floor + 0.5) - 32) / 1.8) * 10) / 10 - 0.3;
+  for (let i = 0; i < 14; i++) {
+    const cc = +(start + i * 0.1).toFixed(1);
+    if (Math.round(+(cc * 1.8 + 32).toFixed(1)) >= floor + 1) return cc;
+  }
+  return +(((floor + 0.5) - 32) / 1.8).toFixed(1);
+}
+
+function renderFloor() {
+  const body = document.getElementById("floor-body");
+  const statusEl = document.getElementById("floor-status");
+  if (!body) return;
+  const st = loadFloor();
+  const today = climateDayOfUTC(Date.now());
+  const sf = settlementFloor();
+
+  if (!sf) {
+    body.innerHTML = `<div style="font-size:11px;color:#94a2b4">No settlement-grade ob yet this climate day. First hourly T-group posts ~:53 past the hour.</div>`;
+    if (statusEl) { statusEl.textContent = "—"; statusEl.style.color = "#94a2b4"; }
+    return;
+  }
+
+  // --- ratchet alert: floor rose vs the last value seen TODAY ---
+  if (st.day === today && typeof st.floor === "number" && sf.floor > st.floor) {
+    const msg = `⛓ KSEA settle floor ratcheted ${st.floor}° → ${sf.floor}°` +
+      (sf.tenths ? ` (${sf.tenths.c.toFixed(1)}°C = ${sf.tenths.f.toFixed(1)}°F, ${sf.src})` : ` (${sf.src})`) +
+      ` — every bucket topping out ≤${sf.floor - 1}° is now DEAD.`;
+    try { if (typeof alertsEnabled !== "function" || alertsEnabled()) triggerAlert("Settle Floor", msg); } catch (e) {}
+    st.banner = msg;
+  }
+  if (st.day !== today) st.banner = null;
+  st.day = today; st.floor = sf.floor; saveFloor(st);
+
+  if (statusEl) { statusEl.textContent = `≥ ${sf.floor}°`; statusEl.style.color = "#fcd34d"; }
+
+  // --- phase of day: how much trust the floor deserves as a settle proxy ---
+  const pdtH = pacificNowParts().hour;
+  let phase, phaseColor;
+  if (pdtH < 10)      { phase = "pre-peak — floor WILL climb, treat strictly as a minimum"; phaseColor = "#94a2b4"; }
+  else if (pdtH < 17) { phase = "peak window — ratchet is live, watch each :53 print";      phaseColor = "#fbbf24"; }
+  else                { phase = "post-peak — floor ≈ settle unless a late push prints";     phaseColor = "#34d399"; }
+
+  // --- seam math ---
+  const tn = sf.tenths;
+  let seamHtml = "";
+  let flipC = null;
+  if (tn && Math.round(tn.f) === sf.floor) {
+    flipC = flipThresholdC(sf.floor);
+    const flipF = +(flipC * 1.8 + 32).toFixed(1);
+    const gapC = +(flipC - tn.c).toFixed(1);
+    const hot = gapC <= 0.3;
+    seamHtml = `<div style="margin-top:8px;font-size:11px;line-height:1.6;color:#cdd9e8">
+      Day max tenths: <b style="color:#eef3fa">${tn.c.toFixed(1)}°C = ${tn.f.toFixed(1)}°F</b>
+      <span style="color:#7e8ea4">(${sf.src} @ ${new Date(tn.t).toLocaleTimeString("en-US",{timeZone:TZ,hour:"numeric",minute:"2-digit"})})</span><br>
+      Flip print: <b style="color:#fcd34d">${flipC.toFixed(1)}°C (${flipF.toFixed(1)}°F)</b> settles <b>${sf.floor + 1}°</b> — <b style="color:${hot ? "#f87171" : "#eef3fa"}">${gapC.toFixed(1)}°C away</b>${hot ? " · ON THE SEAM" : ""}.</div>`;
+  } else {
+    seamHtml = `<div style="margin-top:8px;font-size:11px;color:#cdd9e8">Floor set by <b>${sf.src}</b> (whole-°F source${tn ? "; tenths lane trails at " + tn.f.toFixed(1) + "°F" : ""}).</div>`;
+  }
+
+  // --- bucket-kill strip: Kalshi 2° bins (odd-low: …61–62, 63–64, 65–66…) ---
+  const baseLo = sf.floor % 2 === 0 ? sf.floor - 1 : sf.floor;
+  let strip = `<div style="display:flex;gap:5px;margin-top:10px;flex-wrap:wrap">`;
+  for (let lo = baseLo - 4; lo <= baseLo + 4; lo += 2) {
+    const hi = lo + 1;
+    let bg, bd, fg, tag;
+    if (hi < sf.floor)      { bg = "rgba(248,113,113,0.10)"; bd = "#f87171"; fg = "#f87171"; tag = "DEAD"; }
+    else if (lo <= sf.floor){ bg = "rgba(251,191,36,0.12)";  bd = "#fbbf24"; fg = "#fde68a"; tag = "PINNED"; }
+    else                    { bg = "rgba(96,165,250,0.10)";  bd = "#60a5fa"; fg = "#93c5fd"; tag = "OPEN"; }
+    strip += `<div style="flex:1;min-width:56px;text-align:center;padding:6px 4px;background:${bg};border:1px solid ${bd};border-radius:6px">
+      <div style="font-size:12px;font-weight:700;color:#eef3fa;font-variant-numeric:tabular-nums">${lo}–${hi}°</div>
+      <div style="font-size:9px;font-weight:600;color:${fg};letter-spacing:0.5px">${tag}</div></div>`;
+  }
+  strip += `</div>
+  <div style="margin-top:6px;font-size:9px;line-height:1.5;color:#7e8ea4">DEAD = settle can't land there — YES still bid is free money to fade · PINNED = floor lives here; hits only if the climb stops short of ${flipC != null ? flipC.toFixed(1) + "°C" : "the flip print"} · OPEN = needs climb.</div>`;
+
+  let html = `<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+    <div style="font-size:30px;font-weight:800;color:#fcd34d;font-variant-numeric:tabular-nums">≥ ${sf.floor}°F</div>
+    <div style="font-size:10.5px;line-height:1.5;color:#94a2b4">one-way ratchet · settlement-grade lanes only<br><span style="color:${phaseColor}">${phase}</span></div>
+  </div>` + seamHtml + strip;
+
+  if (st.banner) {
+    html += `<div style="margin-top:8px;padding:6px 9px;background:rgba(252,211,77,0.08);border-left:2px solid #fcd34d;border-radius:4px;font-size:10px;line-height:1.5;color:#fde68a">${st.banner}</div>`;
+  }
+  html += `<div style="margin-top:7px;font-size:9px;color:#56657a">excluded by design: 1-min ASOS display (whole-°C — read 63° on Jun 30 vs T-group max 62.1°F → settled 62)</div>`;
+  body.innerHTML = html;
 }
 
 function gradeScore() {
@@ -3681,6 +3841,7 @@ function renderAll() {
   renderDrift();
   renderEdge();
   renderScorecard();
+  try { renderFloor(); } catch (e) {}
   renderBlip();
   renderLive1m();
   renderConditions();
