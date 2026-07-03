@@ -511,7 +511,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-02.4";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-03.5";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -2167,7 +2167,17 @@ function renderConditions() {
   const tempPart = c.tempF != null ? `Currently <b style="color:#fcd34d">${c.tempF.toFixed(1)}°F</b>` : "Temp unknown";
   const dewPart  = c.dewF  != null ? `dew ${c.dewF.toFixed(0)}°` : "";
   const rhPart   = rh != null ? `RH ${rh.toFixed(0)}%` : "";
-  summaryEl.innerHTML = [tempPart, [dewPart, rhPart].filter(Boolean).join(", "), wind, cloud].filter(Boolean).join(", ") + ".";
+  // the ob's print time — a temperature without its timestamp is a rumor
+  let printedPart = "";
+  if (c.time) {
+    const obMs = Date.parse(c.time);
+    if (isFinite(obMs)) {
+      const ageM = Math.max(0, Math.round((Date.now() - obMs) / 60000));
+      const hhmm = new Date(obMs).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+      printedPart = `<span style="color:#7e8ea4">printed ${hhmm} · ${ageM}m ago</span>`;
+    }
+  }
+  summaryEl.innerHTML = [tempPart, [dewPart, rhPart].filter(Boolean).join(", "), wind, cloud].filter(Boolean).join(", ") + "." + (printedPart ? " " + printedPart : "");
   // KSEA-specific interpretation of wind + dew effect on temperature
   const effectEl = document.getElementById("conditions-effect");
   if (effectEl) { try { effectEl.innerHTML = tempEffectDescription(c); } catch (e) { effectEl.innerHTML = ""; } }
@@ -2979,7 +2989,11 @@ async function fetchSixHour(force) {
       gotData = true;
     }
   } catch (e) {
-    if (!gotData) throw e;
+    // Both lanes down: record it and KEEP GOING so the panel renders its error
+    // state and the floor/kalshi hooks still run. The old re-throw here made a
+    // dead network an unhandled rejection and silently skipped every render
+    // after this point (found by the Jul 3 full-boot test).
+    if (!gotData) cache.error = String((e && e.message) || e);
   }
   try {
     const cut = new Date(now - 21 * 86400 * 1000).toISOString();
@@ -3462,7 +3476,10 @@ async function fetchKalshi(force) {
   // Lane 2: live API via CORS proxy — used when the repo file is missing or stale
   const repoAge = data && data.fetched_utc ? now - Date.parse(data.fetched_utc) : Infinity;
   const pacH = (() => { try { return pacificNowParts().hour; } catch (e) { return 12; } })();
-  if ((!data || repoAge > 20 * 60 * 1000) && pacH >= 5 && pacH < 21) {
+  const inHours = pacH >= 5 && pacH < 21;
+  let liveTried = false;
+  if ((!data || repoAge > 20 * 60 * 1000) && (force || inHours)) {
+    liveTried = true;
     try {
       const dc = kalshiDateCode();
       const api = "https://external-api.kalshi.com/trade-api/v2/markets?series_ticker=KXHIGHSEA&status=open&limit=200";
@@ -3479,10 +3496,15 @@ async function fetchKalshi(force) {
     cache.lane = lane; cache.error = null;
     cache.norm = normalizeKalshi(data.markets);
     cache.fails = 0; cache.nextTry = null;
-  } else {
+  } else if (liveTried) {
     cache.fails = (cache.fails || 0) + 1;
     cache.nextTry = now + Math.min(30 * 60000, 4 * 60000 * Math.pow(2, cache.fails - 1));
-    if (!cache.norm) cache.error = cache.error || "kalshi.json missing and live lane returned no markets for today";
+    cache.idleMsg = null;
+    if (!cache.norm) cache.error = cache.error || "no kalshi.json on the data branch yet (kalshi-quotes v2 off?) and the live lane returned no markets for today";
+  } else {
+    // gate blocked the live lane — that's idle, not failure: no backoff, no red
+    cache.error = null;
+    cache.idleMsg = "quotes idle overnight — live lane resumes 5 AM PT · tap retry to force a pull now";
   }
   saveKalshi(cache);
   try { renderKalshi(); } catch (e) {}
@@ -3553,10 +3575,14 @@ function renderKalshi() {
   const rows = cache.norm || [];
 
   if (!rows.length) {
-    body.innerHTML = `<div style="font-size:11px;color:${cache.error ? "#f87171" : "#94a2b4"};line-height:1.5">${
-      cache.error ? "Kalshi feed error: " + cache.error : "No board yet."
+    const idle = !cache.error && cache.idleMsg;
+    body.innerHTML = `<div style="font-size:11px;color:${cache.error ? "#f87171" : idle ? "#fbbf24" : "#94a2b4"};line-height:1.5">${
+      cache.error ? "Kalshi feed error: " + cache.error : idle ? cache.idleMsg : "No board yet."
     } <a href="#" onclick="fetchKalshi(true);return false" style="color:#60a5fa">↻ retry</a></div>`;
-    if (statusEl) { statusEl.textContent = cache.error ? "error" : "—"; statusEl.style.color = cache.error ? "#f87171" : "#94a2b4"; }
+    if (statusEl) {
+      statusEl.textContent = cache.error ? "error" : idle ? "idle" : "—";
+      statusEl.style.color = cache.error ? "#f87171" : idle ? "#fbbf24" : "#94a2b4";
+    }
     return;
   }
 
@@ -3863,7 +3889,7 @@ function feedsTestList() {
     ["Model council", councilUrl(COUNCIL_SAFE)],
     ["api.weather.gov obs", "https://api.weather.gov/stations/KSEA/observations/latest"],
     ["aviationweather (corsproxy)", "https://corsproxy.io/?url=" + encodeURIComponent("https://aviationweather.gov/api/data/metar?ids=KSEA&format=json&hours=2")],
-    ["Kalshi data-branch", "https://raw.githubusercontent.com/kingkaney/btc-assistant/data/kalshi.json"],
+    ["Kalshi data-branch", "https://raw.githubusercontent.com/kingkaney/btc-assistant/data/kalshi.json", { optional404: "not published yet — expected while kalshi-quotes v2 is off; live lane covers market hours" }],
   ];
   return list;
 }
@@ -3873,11 +3899,11 @@ async function runFeedsTest() {
   if (!body) return;
   const rows = feedsTestList().map(([name]) => `<div id="feedrow-${name.replace(/[^a-z]/gi, "")}" style="font-size:10.5px;padding:2.5px 0;color:#94a2b4">${name} — testing…</div>`);
   body.innerHTML = `<div style="font-variant-numeric:tabular-nums">${rows.join("")}</div>` + feedsFooterHtml();
-  let bad = 0;
-  for (const [name, url] of feedsTestList()) {
+  let bad = 0, idle = 0;
+  for (const [name, url, opts = {}] of feedsTestList()) {
     const el = document.getElementById("feedrow-" + name.replace(/[^a-z]/gi, ""));
     const t0 = Date.now();
-    let msg, ok = false;
+    let msg, ok = false, soft = false;
     try {
       const ctl = new AbortController();
       const to = setTimeout(() => ctl.abort(), 9000);
@@ -3885,15 +3911,21 @@ async function runFeedsTest() {
       clearTimeout(to);
       ok = r.ok;
       msg = `HTTP ${r.status} · ${Date.now() - t0}ms`;
-      if (!r.ok) { try { const j = await r.json(); if (j && j.reason) msg += ` · ${j.reason}`; } catch (e2) {} }
+      if (!r.ok && r.status === 404 && opts.optional404) { soft = true; msg += ` · ${opts.optional404}`; }
+      else if (!r.ok) { try { const j = await r.json(); if (j && j.reason) msg += ` · ${j.reason}`; } catch (e2) {} }
     } catch (e) {
       msg = (e && e.name === "AbortError") ? "TIMEOUT >9s" : `${(e && e.message) || e}`;
     }
-    if (!ok) bad++;
-    if (el) el.innerHTML = `<span style="color:${ok ? "#34d399" : "#f87171"}">${ok ? "●" : "✗"}</span> <b style="color:#cdd9e8">${name}</b> — <span style="color:${ok ? "#94a2b4" : "#fca5a5"}">${msg}</span>`;
+    if (!ok && soft) idle++; else if (!ok) bad++;
+    const dotCol = ok ? "#34d399" : soft ? "#fbbf24" : "#f87171";
+    const txtCol = ok ? "#94a2b4" : soft ? "#fde68a" : "#fca5a5";
+    if (el) el.innerHTML = `<span style="color:${dotCol}">${ok ? "●" : soft ? "◦" : "✗"}</span> <b style="color:#cdd9e8">${name}</b> — <span style="color:${txtCol}">${msg}</span>`;
   }
   const st = document.getElementById("feeds-status");
-  if (st) { st.textContent = bad ? bad + " down" : "all up"; st.style.color = bad ? "#f87171" : "#34d399"; }
+  if (st) {
+    st.textContent = (bad ? bad + " down" : "all up") + (idle ? " · " + idle + " idle" : "");
+    st.style.color = bad ? "#f87171" : idle ? "#fbbf24" : "#34d399";
+  }
 }
 
 function feedsFooterHtml() {
@@ -4264,8 +4296,12 @@ function edgeSetPrice(idx, val) {
   const s = loadEdge(); s.dates = s.dates || {};
   const d = state.selectedDate;
   const e = s.dates[d] || (s.dates[d] = { prices: {}, at: 0 });
+  // prices key by bucket LABEL against the day-frozen bucket set — index keys
+  // caused typed prices to silently migrate rows whenever the projection
+  // median re-centered the bins (the Jul 3, 2 AM "stupid shit").
+  const key = (e.buckets && e.buckets[idx]) ? e.buckets[idx].label : String(idx);
   const c = parseFloat(val);
-  if (isFinite(c) && c >= 1 && c <= 99) e.prices[idx] = c; else delete e.prices[idx];
+  if (isFinite(c) && c >= 1 && c <= 99) e.prices[key] = c; else delete e.prices[key];
   e.at = Date.now();
   saveEdge(s); renderEdge();
 }
@@ -4290,17 +4326,50 @@ function renderEdge() {
     bodyEl.innerHTML = `<div style="font-size:11px;color:#94a2b4">Waiting for ensemble buckets…</div>`;
     if (statusEl) statusEl.textContent = "—"; return;
   }
-  const s = loadEdge();
+  const s = loadEdge(); s.dates = s.dates || {};
   const bank = s.bank || 100;
-  const ent = (s.dates && s.dates[date]) || { prices: {} };
+  const ent = s.dates[date] || (s.dates[date] = { prices: {} });
   const calN = gradeScore().stats.n;
   const capped = calN < 15;
 
+  // FREEZE the bucket set on first render of the climate day. The projection
+  // median moves all day; the ROWS must not. Percentages are then recomputed
+  // from the calibrated samples onto the frozen bins and lightly smoothed
+  // (EMA, α=0.5 per refresh) so they update without twitching.
+  if (!ent.buckets || !ent.buckets.length) {
+    ent.buckets = proj.buckets.map(b => ({ label: b.label, lo: b.lo, hi: b.hi }));
+    // migrate any legacy index-keyed prices onto labels, best effort
+    Object.keys(ent.prices || {}).forEach(k => {
+      if (/^\d+$/.test(k) && ent.buckets[+k]) { ent.prices[ent.buckets[+k].label] = ent.prices[k]; delete ent.prices[k]; }
+    });
+    saveEdge(s);
+  }
+  const frozen = ent.buckets;
+  let probs;
+  if (proj.samples && proj.samples.length) {
+    const n = proj.samples.length;
+    probs = frozen.map(b => {
+      const lo = b.lo <= -900 ? -Infinity : b.lo - 0.5;
+      const hi = b.hi >=  900 ?  Infinity : b.hi + 0.5;
+      let c = 0; for (let k = 0; k < n; k++) { const v = proj.samples[k]; if (v >= lo && v < hi) c++; }
+      return c / n;
+    });
+  } else {
+    probs = frozen.map(fb => { const j = proj.buckets.findIndex(pb => pb.label === fb.label); return j >= 0 ? proj.probs[j] : 0; });
+  }
+  ent.pSmooth = ent.pSmooth || {};
+  probs = probs.map((p, i) => {
+    const k = frozen[i].label;
+    ent.pSmooth[k] = ent.pSmooth[k] == null ? p : 0.5 * ent.pSmooth[k] + 0.5 * p;
+    return ent.pSmooth[k];
+  });
+  saveEdge(s);
+
   let best = null;
   let rowsHtml = "";
-  proj.buckets.forEach((b, i) => {
-    const p = proj.probs[i] || 0;
-    const priceVal = ent.prices[i] != null ? ent.prices[i] : "";
+  frozen.forEach((b, i) => {
+    const p = probs[i] || 0;
+    const priceVal = ent.prices[b.label] != null ? ent.prices[b.label] : (ent.prices[i] != null ? ent.prices[i] : "");
     let calc = `<span style="color:#56657a">—</span>`;
     if (priceVal !== "") {
       const c = +priceVal, fee = kalshiFee(c), pc = p * 100;
@@ -4339,7 +4408,7 @@ function renderEdge() {
     html += `<div style="margin-top:8px;padding:7px 9px;background:rgba(52,211,153,0.08);border-left:2px solid #34d399;border-radius:4px;font-size:11px;color:#a7f3d0">
       Best: <b>${best.side} ${best.label}°</b> · net edge <b>+${best.edge.toFixed(1)}¢</b> after fees · quarter-Kelly ≈ <b>${best.nCon}</b> contracts</div>`;
   }
-  html += `<div style="margin-top:7px;font-size:9px;color:#7e8ea4;line-height:1.5">Enter YES ¢ off the Kalshi board. Fees (~7% × p × 1−p) included; your fill vs the one price you typed (spread) is not. Edges under 5¢ net are noise.${
+  html += `<div style="margin-top:7px;font-size:9px;color:#7e8ea4;line-height:1.5">Bins frozen for the climate day (typed prices stay on their rows); P recomputed from live samples, EMA-smoothed. Enter YES ¢ off the Kalshi board. Fees (~7% × p × 1−p) included; your fill vs the one price you typed (spread) is not. Edges under 5¢ net are noise.${
     capped ? ` <span style="color:#fbbf24">Model unvalidated (${calN} graded days) — size capped at 5% bankroll until the scorecard proves it.</span>` : ""}</div>`;
   bodyEl.innerHTML = html;
 }
