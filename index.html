@@ -439,7 +439,7 @@
 
 <!-- RULES: the playbook. Single source of truth — when a chat call contradicts this, THIS wins. -->
 <div class="panel" id="rules-panel">
-  <div class="panel-head"><span>📖 Rules</span><span class="accent" style="color:#94a2b4">amended 2026-07-02</span></div>
+  <div class="panel-head"><span>📖 Rules</span><span class="accent" style="color:#94a2b4">amended 2026-07-02 pm</span></div>
   <div class="panel-body" style="font-size:10.5px;line-height:1.65;color:#cdd9e8">
     <div style="font-size:9.5px;color:#7e8ea4;margin-bottom:7px">Every claim carries n = settled days behind it. n&lt;8 = provisional. Chat contradicts this panel → this panel wins until deliberately amended (edit here, commit).</div>
 
@@ -474,14 +474,14 @@
     <details style="margin-bottom:6px">
       <summary style="font-weight:700;color:#eef3fa;cursor:pointer">5 · Ops</summary>
       <div style="padding:5px 0 2px 2px">
-      <b>Backup weekly</b> (panel nags at 7d); Synoptic token never in backups or the public repo — re-enter after import. Quote feed: repo kalshi.json (Actions, real cadence 5–15 min) → live proxy fallback; <b>stale banner showing → verify price in the Kalshi app before executing</b>. The floor only sees prints that reach a cache — a between-hours spike with no SPECI hides until the 6-hr group; that gap is the Termux 1-min alerter's job (tripwire, not settlement). Status: pending.
+      <b>Backup weekly</b> (panel nags at 7d); Synoptic token never in backups or the public repo — re-enter after import. Quote feed: repo kalshi.json (Actions, real cadence 5–15 min) → live proxy fallback; <b>stale banner showing → verify price in the Kalshi app before executing</b>. The floor only sees prints that reach a cache — a between-hours spike with no SPECI hides until the 6-hr group; that gap is the Termux 1-min alerter's job (tripwire, not settlement). Status: pending. <b>Lane-divergence alarm</b>: settlement lanes quiet &gt;75 min while a live lane reads ≥1.5° off the last print → floor UNTRUSTED, pace verdicts refused, DEAD/fork tags suspended, cold-side P flagged as overstated. Display lanes generate <i>doubt</i>, never settlement values. (n=1: Jul 2 — the cache froze at 12:53 and KSEA ran to 68 on the live lanes while every panel swore the max was 64.9.)
       </div>
     </details>
 
     <details>
       <summary style="font-weight:700;color:#eef3fa;cursor:pointer">6 · Claim hygiene</summary>
       <div style="padding:5px 0 2px 2px">
-      Every empirical claim gets an n; new patterns enter provisional (n=1) and earn trust proportionally. Jul 2's "suppressed days bounce back warm" lean was n=1 — it pointed right, which was luck wearing a thesis costume. Amend rules here, in the file, with evidence — not in chat, not from memory.
+      Every empirical claim gets an n; new patterns enter provisional (n=1) and earn trust proportionally. Jul 2's "suppressed days bounce back warm" lean was n=1 — it pointed right, which was luck wearing a thesis costume. Amend rules here, in the file, with evidence — not in chat, not from memory. <b>Screenshots during market hours are live telemetry — answer the position first, fix the app second</b> (n=1, Jul 2 pm). And <b>rhyme is not data</b>: the honest 68.0° live read was dismissed as an artifact because it resembled Jun 30's display trap — matching a past failure pattern is a hypothesis to test against fresh prints, never a verdict (n=1, Jul 2, cost: a wrong "hold, you're paid" call on a live position).
       </div>
     </details>
   </div>
@@ -2982,6 +2982,44 @@ function settlementFloor() {
   return { floor, src, tenths: tm };
 }
 
+// =============================================================================
+// LANE DIVERGENCE — the Jul 2 failure class. The settlement cache went quiet
+// after 12:53 while the live lanes watched the deck break and KSEA run to 68.
+// Every floor/verdict served off the dead cache was fiction wearing a seatbelt.
+// Alarm = no settlement-grade ob for >75 min AND a live lane reads ≥1.5° away
+// from the LAST settlement print. Stale-but-flat is a note; stale-and-moved is
+// an alarm — the ratchet is probably missing prints. Display lanes are used
+// here to generate DOUBT, never settlement values: tripwire, not truth.
+// =============================================================================
+function laneDivergence() {
+  try {
+    const today = climateDayOfUTC(Date.now());
+    let newest = null;
+    const scan = (ms, f) => { if (isFinite(ms) && typeof f === "number" && climateDayOfUTC(ms) === today && (!newest || ms > newest.t)) newest = { t: ms, f }; };
+    const tg = (loadSixHr().tgroups) || {};
+    Object.keys(tg).forEach(k => scan(Date.parse(k), tg[k].f));
+    const so = (loadSpeci().obs) || {};
+    Object.keys(so).forEach(k => { const o = so[k]; scan(o.t || Date.parse(k), o.tf); });
+    if (!newest) return null;                       // pre-first-print — nothing to diverge from
+    const ageMin = (Date.now() - newest.t) / 60000;
+
+    // best live reference: 1-min feed if fresh, else current conditions
+    let liveT = null, liveSrc = null;
+    const pts = (loadL1M().points) || [];
+    if (pts.length) {
+      const p = pts[pts.length - 1];
+      if (Date.now() - p.t < 15 * 60000) { liveT = p.f; liveSrc = "1-min feed"; }
+    }
+    if (liveT == null && typeof state === "object" && state && state.current && state.current.tempF != null) {
+      const ct = state.current.time ? Date.parse(state.current.time) : NaN;
+      if (!isFinite(ct) || Date.now() - ct < 45 * 60000) { liveT = state.current.tempF; liveSrc = state.current.source || "current conditions"; }
+    }
+    const gap = liveT != null ? liveT - newest.f : null;
+    const diverged = ageMin > 75 && gap != null && Math.abs(gap) >= 1.5;
+    return { ageMin, settleT: newest.f, settleAt: newest.t, liveT, liveSrc, gap, diverged };
+  } catch (e) { return null; }
+}
+
 // Smallest tenth °C whose °F conversion (computed EXACTLY like the rest of the
 // app: toFixed(1) then Math.round) settles floor+1. Searched, not divided, so
 // float noise can't shift the seam.
@@ -3019,7 +3057,12 @@ function renderFloor() {
   if (st.day !== today) st.banner = null;
   st.day = today; st.floor = sf.floor; saveFloor(st);
 
-  if (statusEl) { statusEl.textContent = `≥ ${sf.floor}°`; statusEl.style.color = "#fcd34d"; }
+  const ld = laneDivergence();
+  const fmtAgeM = m => m < 90 ? Math.round(m) + "m" : (m / 60).toFixed(1) + "h";
+  if (statusEl) {
+    statusEl.textContent = `≥ ${sf.floor}°` + (ld ? ` · ${fmtAgeM(ld.ageMin)}` : "");
+    statusEl.style.color = ld && ld.diverged ? "#f87171" : ld && ld.ageMin > 75 ? "#fbbf24" : "#fcd34d";
+  }
 
   // --- phase of day: how much trust the floor deserves as a settle proxy ---
   const pdtH = pacificNowParts().hour;
@@ -3061,8 +3104,12 @@ function renderFloor() {
   strip += `</div>
   <div style="margin-top:6px;font-size:9px;line-height:1.5;color:#7e8ea4">DEAD = settle can't land there — YES still bid is free money to fade · PINNED = floor lives here; hits only if the climb stops short of ${flipC != null ? flipC.toFixed(1) + "°C" : "the flip print"} · OPEN = needs climb.</div>`;
 
-  let html = `<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
-    <div style="font-size:30px;font-weight:800;color:#fcd34d;font-variant-numeric:tabular-nums">≥ ${sf.floor}°F</div>
+  let html = "";
+  if (ld && ld.diverged) {
+    html += `<div style="margin-bottom:9px;padding:8px 10px;background:rgba(248,113,113,0.10);border:1px solid #f87171;border-radius:6px;font-size:11px;line-height:1.6;color:#fecaca">⚠ <b>FLOOR UNTRUSTED.</b> No settlement print in <b>${fmtAgeM(ld.ageMin)}</b> while ${ld.liveSrc} reads <b>${ld.liveT.toFixed(1)}°F</b> — ${ld.gap >= 0 ? "+" : ""}${ld.gap.toFixed(1)}° off the last print (${ld.settleT.toFixed(1)}°). The ratchet is likely missing prints. Treat this floor as <b>UNKNOWN</b>, not as safe. Fix the feed before trusting any max-based claim.</div>`;
+  }
+  html += `<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+    <div style="font-size:30px;font-weight:800;color:${ld && ld.diverged ? "#f87171" : "#fcd34d"};font-variant-numeric:tabular-nums">≥ ${sf.floor}°F</div>
     <div style="font-size:10.5px;line-height:1.5;color:#94a2b4">one-way ratchet · settlement-grade lanes only<br><span style="color:${phaseColor}">${phase}</span></div>
   </div>` + seamHtml + strip;
 
@@ -3274,6 +3321,8 @@ function renderKalshi() {
 
   const dist = kalshiModelDist(rows);
   const floorNow = (() => { try { const sf = settlementFloor(); return sf ? sf.floor : null; } catch (e) { return null; } })();
+  const ldK = (typeof laneDivergence === "function") ? laneDivergence() : null;
+  const lanesDown = !!(ldK && ldK.diverged);
   const tn = (() => { try { return floorTenthsMax(); } catch (e) { return null; } })();
   const pace = currentClimbPace();
   const pacHr = insightPacHour();
@@ -3296,12 +3345,13 @@ function renderKalshi() {
   });
 
   let html = "";
+  if (lanesDown) html += `<div style="margin-bottom:7px;padding:6px 9px;background:rgba(248,113,113,0.10);border:1px solid #f87171;border-radius:5px;font-size:10px;line-height:1.55;color:#fecaca">⚠ <b>Settlement lanes down</b> (quiet ${Math.round(ldK.ageMin)}m, ${ldK.liveSrc} ${ldK.gap >= 0 ? "+" : ""}${ldK.gap.toFixed(1)}° off the last print). DEAD tags and fork prints suspended; the left-tail clamp is stale, so <b>cold-side P and EV are likely overstated</b>. Fix the feed first.</div>`;
   if (stale) html += `<div style="margin-bottom:7px;padding:5px 8px;background:rgba(251,191,36,0.08);border-left:2px solid #fbbf24;border-radius:4px;font-size:10px;color:#fde68a">⚠ Quotes ${Math.round(ageMin)} min old — verify on the Kalshi app before pulling the trigger.</div>`;
 
   calc.forEach(c => {
     const r = c.r;
-    const dead = floorNow != null && r.hi != null && r.hi < floorNow;
-    const pinned = floorNow != null && (r.lo == null || r.lo <= floorNow) && (r.hi == null || floorNow <= r.hi);
+    const dead = !lanesDown && floorNow != null && r.hi != null && r.hi < floorNow;
+    const pinned = !lanesDown && floorNow != null && (r.lo == null || r.lo <= floorNow) && (r.hi == null || floorNow <= r.hi);
     const isBest = best && best.i === c.i;
     const evTxt = (v) => v == null ? "—" : `<b style="color:${v >= 8 ? "#34d399" : v >= 0 ? "#cdd9e8" : "#f87171"}">${v >= 0 ? "+" : ""}${v.toFixed(1)}¢</b>`;
 
@@ -3329,6 +3379,7 @@ function renderKalshi() {
       fork = `holds if day max stays <b style="color:#fcd34d">&lt; ${flipC.toFixed(1)}°C</b> (${(+(flipC * 1.8 + 32)).toFixed(1)}°F)`;
     }
 
+    if (lanesDown) fork = "";
     html += `<div style="padding:7px 8px;margin-bottom:5px;border-radius:6px;border:1px solid ${isBest ? "#fcd34d" : dead ? "rgba(248,113,113,0.45)" : "rgba(255,255,255,0.09)"};background:${isBest ? "rgba(252,211,77,0.07)" : "rgba(255,255,255,0.02)"}">
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;font-variant-numeric:tabular-nums">
         <span style="font-size:12.5px;font-weight:700;color:#eef3fa">${r.label}${isBest ? ` <span style="font-size:9px;color:#fcd34d">★ BEST EV (${best.side.toUpperCase()})</span>` : ""}</span>
@@ -5252,7 +5303,11 @@ function renderPace() {
   <div style="margin-top:5px;font-size:9px;color:#56657a">verdict lane: <b>${dayHighLane}</b> \u00b7 target: ${tgtSrc}</div>`;
 
   let verdict = "", color = "#9ca3af", stat = "\u2014";
-  if (deadTgt) {
+  const __ld = (typeof laneDivergence === "function") ? laneDivergence() : null;
+  if (__ld && __ld.diverged) {
+    verdict = `\u26d4 <b>No verdict \u2014 settlement lanes quiet ${Math.round(__ld.ageMin)}m while ${__ld.liveSrc} reads ${__ld.liveT.toFixed(1)}\u00b0 (${__ld.gap >= 0 ? "+" : ""}${__ld.gap.toFixed(1)}\u00b0 off the last print).</b> The floor and every max-based claim are untrusted until a settlement-grade ob lands. Fix the feed before trading the read.`;
+    color = "#f87171"; stat = "LANES DOWN";
+  } else if (deadTgt) {
     verdict = `\u2620 <b>${label} is DEAD</b> \u2014 the settlement floor already passed its top. No rate math resurrects it; the live question moved up a bucket.`;
     color = "#f87171"; stat = "DEAD";
   } else if (dayHigh >= capT) {
