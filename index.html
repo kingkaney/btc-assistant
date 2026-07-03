@@ -437,6 +437,12 @@
   <div class="panel-body" id="backup-body"></div>
 </div>
 
+<!-- FEEDS: on-demand lane test. Three "app broken" nights, three different causes — this answers "which lane, what error" in one tap. -->
+<div class="panel" id="feeds-panel">
+  <div class="panel-head"><span>🩺 Feeds</span><span class="accent" id="feeds-status">—</span></div>
+  <div class="panel-body" id="feeds-body"></div>
+</div>
+
 <!-- RULES: the playbook. Single source of truth — when a chat call contradicts this, THIS wins. -->
 <div class="panel" id="rules-panel">
   <div class="panel-head"><span>📖 Rules</span><span class="accent" style="color:#94a2b4">amended 2026-07-02 pm</span></div>
@@ -505,6 +511,7 @@
 // =============================================================================
 // Config
 // =============================================================================
+const APP_BUILD = "b2026-07-02.4";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -1960,7 +1967,7 @@ function renderStatus() {
   else if (state.loading) { dot.className="dot load"; label.textContent="loading"; }
   else if (state.modelStaleMin != null) { dot.className="dot load"; label.textContent=`model cached ${state.modelStaleMin < 90 ? Math.round(state.modelStaleMin) + "m" : (state.modelStaleMin / 60).toFixed(1) + "h"}`; }
   else { dot.className="dot live"; label.textContent="live"; }
-  if (state.lastFetch) fetchAge.textContent = `fetched ${Math.floor((Date.now()-state.lastFetch)/1000)}s ago`;
+  fetchAge.textContent = (state.lastFetch ? `fetched ${Math.floor((Date.now()-state.lastFetch)/1000)}s ago · ` : "") + APP_BUILD;
   mem.textContent = state.nMembers ? `${state.nMembers} ens members` : "deterministic only";
   if (state.error) { errEl.style.display="block"; errEl.className="err-box"; errEl.textContent=`! ${state.error}`; }
   else errEl.style.display="none";
@@ -3439,8 +3446,16 @@ async function fetchKalshi(force) {
   if (!force && cache.fails && cache.nextTry && now < cache.nextTry) return;
   cache.lastFetch = now;
   let data = null, lane = null;
-  // Lane 1: repo file (same origin on GitHub Pages, committed by Actions ~5 min)
+  // Lane 1: raw data-branch file. The Actions job commits kalshi.json to the
+  // 'data' branch, NOT the Pages branch — a lesson written in run #50s: 5-min
+  // commits to the serving branch machine-gunned Pages deployments until they
+  // failed and blocked real app pushes (Jul 2 night).
   try {
+    const r = await fetch("https://raw.githubusercontent.com/kingkaney/btc-assistant/data/kalshi.json?ts=" + now, { cache: "no-store" });
+    if (r.ok) { const j = await r.json(); if (j && (j.markets || []).length) { data = j; lane = "data-branch"; } }
+  } catch (e) {}
+  // Lane 1b: legacy same-branch file, if anyone still commits it there
+  if (!data) try {
     const r = await fetch("kalshi.json?ts=" + now, { cache: "no-store" });
     if (r.ok) { const j = await r.json(); if (j && (j.markets || []).length) { data = j; lane = "repo"; } }
   } catch (e) {}
@@ -3835,6 +3850,65 @@ function renderBackup() {
       : `Last export ${days < 1 ? "today" : Math.floor(days) + " days ago"} (${meta.keys || "?"} keys).`
     }</div>
     <div style="margin-top:5px;font-size:9px;color:#56657a;line-height:1.5">Drop the file in the repo as <b>cal_backup.json</b> if you want it versioned. The Synoptic token is deliberately excluded — never commit it to a public repo.</div>`;
+}
+
+// =============================================================================
+// FEEDS SELF-TEST — every external lane, status + latency + exact error text.
+// "Failed to fetch" = network/DNS/CORS level; an HTTP code = the service spoke.
+// =============================================================================
+function feedsTestList() {
+  const list = [
+    ["Open-Meteo forecast", FORECAST_URL],
+    ["Open-Meteo ensemble", ENSEMBLE_URL],
+    ["Model council", councilUrl(COUNCIL_SAFE)],
+    ["api.weather.gov obs", "https://api.weather.gov/stations/KSEA/observations/latest"],
+    ["aviationweather (corsproxy)", "https://corsproxy.io/?url=" + encodeURIComponent("https://aviationweather.gov/api/data/metar?ids=KSEA&format=json&hours=2")],
+    ["Kalshi data-branch", "https://raw.githubusercontent.com/kingkaney/btc-assistant/data/kalshi.json"],
+  ];
+  return list;
+}
+
+async function runFeedsTest() {
+  const body = document.getElementById("feeds-body");
+  if (!body) return;
+  const rows = feedsTestList().map(([name]) => `<div id="feedrow-${name.replace(/[^a-z]/gi, "")}" style="font-size:10.5px;padding:2.5px 0;color:#94a2b4">${name} — testing…</div>`);
+  body.innerHTML = `<div style="font-variant-numeric:tabular-nums">${rows.join("")}</div>` + feedsFooterHtml();
+  let bad = 0;
+  for (const [name, url] of feedsTestList()) {
+    const el = document.getElementById("feedrow-" + name.replace(/[^a-z]/gi, ""));
+    const t0 = Date.now();
+    let msg, ok = false;
+    try {
+      const ctl = new AbortController();
+      const to = setTimeout(() => ctl.abort(), 9000);
+      const r = await fetch(url, { signal: ctl.signal, cache: "no-store" });
+      clearTimeout(to);
+      ok = r.ok;
+      msg = `HTTP ${r.status} · ${Date.now() - t0}ms`;
+      if (!r.ok) { try { const j = await r.json(); if (j && j.reason) msg += ` · ${j.reason}`; } catch (e2) {} }
+    } catch (e) {
+      msg = (e && e.name === "AbortError") ? "TIMEOUT >9s" : `${(e && e.message) || e}`;
+    }
+    if (!ok) bad++;
+    if (el) el.innerHTML = `<span style="color:${ok ? "#34d399" : "#f87171"}">${ok ? "●" : "✗"}</span> <b style="color:#cdd9e8">${name}</b> — <span style="color:${ok ? "#94a2b4" : "#fca5a5"}">${msg}</span>`;
+  }
+  const st = document.getElementById("feeds-status");
+  if (st) { st.textContent = bad ? bad + " down" : "all up"; st.style.color = bad ? "#f87171" : "#34d399"; }
+}
+
+function feedsFooterHtml() {
+  let mcAge = "none";
+  try { const mc = JSON.parse(localStorage.getItem(MODEL_CACHE_KEY) || "null"); if (mc && mc.t) mcAge = Math.round((Date.now() - mc.t) / 60000) + "m"; } catch (e) {}
+  return `<div style="margin-top:6px;font-size:9px;line-height:1.6;color:#56657a">build <b>${APP_BUILD}</b> · model cache: ${mcAge} · last app error: ${state && state.error ? `<span style="color:#fca5a5">${state.error}</span>` : "none"}<br>"Failed to fetch" = the request never reached the service (network/DNS/CORS) · an HTTP code = the service answered.</div>`;
+}
+
+function renderFeeds() {
+  const body = document.getElementById("feeds-body");
+  if (!body) return;
+  if (!body.dataset.init) {
+    body.dataset.init = "1";
+    body.innerHTML = `<button onclick="runFeedsTest()" style="background:rgba(96,165,250,0.12);color:#93c5fd;border:1px solid #60a5fa;border-radius:5px;padding:6px 12px;font-size:11px;cursor:pointer">▶ test all lanes</button>` + feedsFooterHtml();
+  }
 }
 
 function gradeScore() {
@@ -4744,7 +4818,7 @@ function renderAll() {
     renderEdge, renderScorecard, renderFloor, renderKalshi, renderTrades,
     renderBackup, renderBlip, renderLive1m, renderConditions,
     renderNearbyStations, renderSynopticStations, renderStationDots,
-    renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr,
+    renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderFeeds,
     renderSkycams, renderBuckets, renderChart, renderCurrent,
     renderAlertsSummary, renderCalLogStatus, renderCalibPanel, renderAccLogStatus,
   ];
