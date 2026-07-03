@@ -200,6 +200,12 @@
   <div class="panel-body" id="floor-body"><div style="font-size:11px;color:#94a2b4">waiting for the first settlement-grade ob of the climate day…</div></div>
 </div>
 
+<!-- KALSHI BOARD: live buckets from kalshi.json (Actions) + model EV + auto forks -->
+<div class="panel" id="kalshi-panel">
+  <div class="panel-head"><span>🎯 Kalshi Board · Model EV</span><span class="accent" id="kalshi-status">—</span></div>
+  <div class="panel-body" id="kalshi-body"><div style="font-size:11px;color:#94a2b4">waiting for kalshi.json…</div></div>
+</div>
+
 <!-- PACE: today's climb, observed vs required rate, over/under verdict -->
 <div class="panel" id="pace-panel">
   <div class="panel-head"><span>⏱ Pace</span><span class="accent" id="pace-status">—</span></div>
@@ -216,6 +222,12 @@
 <div class="panel" id="score-panel">
   <div class="panel-head"><span>🏛 Official Settle · Scorecard</span><span class="accent" id="score-status">—</span></div>
   <div class="panel-body" id="score-body"><div style="font-size:11px;color:#94a2b4">fetching official climate reports…</div></div>
+</div>
+
+<!-- TRADE LOG: entries with model EV stamped at entry; auto-settles off final CLI -->
+<div class="panel" id="trades-panel">
+  <div class="panel-head"><span>🧾 Trades</span><span class="accent" id="trades-status">—</span></div>
+  <div class="panel-body" id="trades-body"></div>
 </div>
 
 <!-- LIVE 1-MIN FEED (MADIS-ready; sleeps until a relay URL is configured) -->
@@ -419,6 +431,62 @@
 </div>
 
 <!-- 1-MINUTE BLIP RISK (NCEI one-minute archive via IEM) -->
+<!-- BACKUP: export/import all ksea_* app state (cal log lives in localStorage — one data-clear from gone) -->
+<div class="panel" id="backup-panel">
+  <div class="panel-head"><span>💾 Backup</span><span class="accent" id="backup-status">—</span></div>
+  <div class="panel-body" id="backup-body"></div>
+</div>
+
+<!-- RULES: the playbook. Single source of truth — when a chat call contradicts this, THIS wins. -->
+<div class="panel" id="rules-panel">
+  <div class="panel-head"><span>📖 Rules</span><span class="accent" style="color:#94a2b4">amended 2026-07-02</span></div>
+  <div class="panel-body" style="font-size:10.5px;line-height:1.65;color:#cdd9e8">
+    <div style="font-size:9.5px;color:#7e8ea4;margin-bottom:7px">Every claim carries n = settled days behind it. n&lt;8 = provisional. Chat contradicts this panel → this panel wins until deliberately amended (edit here, commit).</div>
+
+    <details open style="margin-bottom:6px">
+      <summary style="font-weight:700;color:#eef3fa;cursor:pointer">1 · Settlement mechanics — validated</summary>
+      <div style="padding:5px 0 2px 2px">
+      Settles on <b>NWS CLISEA daily max, whole °F</b> — from METAR <b>T-group tenths</b> and 6-hr max groups. The <b>1-min display is NOT settlement-grade</b> (whole-°C, reads high on spikes: Jun 30 display 63 vs T-group 62.1 → settled 62, n=1 trap). Tenths round to whole °F, <b>.5 up</b> — seams sit at x.5°F; the floor panel computes exact flip prints. On bucket edges trust T-group tenths; 17 settle values are impossible, fat values draw two raw degrees. <b>Floor is a one-way ratchet</b>: dead buckets with YES still bid = free fade.
+      </div>
+    </details>
+
+    <details style="margin-bottom:6px">
+      <summary style="font-weight:700;color:#eef3fa;cursor:pointer">2 · Forecast — the machine makes the number</summary>
+      <div style="padding:5px 0 2px 2px">
+      getDayProjection (ensemble → bias calib → climb override) is the forecast; observed-climb anchoring cut MAE 3.38°→1.45°, buckets 0/8→4/8 (n=8). The Kalshi panel rebuckets its samples onto the <b>live board</b>, clamps the left tail at printed tenths, prices net EV after fees. <b>Chat's role is veto only</b> — regime breaks the model can't see; say why, log it. Historic warm bias +3–4°F in marine regimes (n=4, one cold miss Jul 1) now lives <b>inside CALIB — never re-apply by hand</b>. Touch CALIB.biasF only when the settle-graded residual holds one sign for n≥8.
+      </div>
+    </details>
+
+    <details style="margin-bottom:6px">
+      <summary style="font-weight:700;color:#eef3fa;cursor:pointer">3 · Intraday reads</summary>
+      <div style="padding:5px 0 2px 2px">
+      Arbiter = <b>T-group climb rate</b>, never sky photos (they whipsaw). Layered break (BKN under OVC) ≠ break; single-layer OVC→BKN→SCT is genuine. <b>Solar-noon rule is a deck diagnostic, not a heating clock</b> (corrected Jul 2): flat climb + <i>intact</i> OVC after max insolation ⇒ ceiling probably in (provisional n≈3) — but KSEA heats to <b>5–6:30 PM</b> and late spike prints are real (n=2). <b>Never declare a settle before the 5–6 PM prints clear.</b> Fork table uses a 5:30 effective horizon with this caveat attached.
+      </div>
+    </details>
+
+    <details style="margin-bottom:6px">
+      <summary style="font-weight:700;color:#eef3fa;cursor:pointer">4 · Market rules</summary>
+      <div style="padding:5px 0 2px 2px">
+      <b>Never price a leg without the live board</b> — buckets come from the board, period; Kalshi runs even-low pairs + threshold ends, the app's odd-low bins are legacy (n=1 process error, Jul 2). <b>Size 10–20%/day hard cap; correlated legs = ONE bet</b> (validated Jul 1: 2° miss cost ~$12). Displayed YES summing &gt;~103 = you're reading asks → work a passive bid. <b>Trade only net EV ≥ +8¢</b> after the 7·p·(1−p)¢ fee (provisional; revisit at trade-log n=20). EV is stamped at entry and graded vs realized at settle — forecast calibration ≠ edge calibration. <b>Exits are written at entry</b> from the fork prints; cut on regime-flip evidence, not certainty — 15–20¢ eaten beats a ride to zero. PINNED + flat climb after 2 PM = probably paid: hold <i>with the ratchet alert armed</i>.
+      </div>
+    </details>
+
+    <details style="margin-bottom:6px">
+      <summary style="font-weight:700;color:#eef3fa;cursor:pointer">5 · Ops</summary>
+      <div style="padding:5px 0 2px 2px">
+      <b>Backup weekly</b> (panel nags at 7d); Synoptic token never in backups or the public repo — re-enter after import. Quote feed: repo kalshi.json (Actions, real cadence 5–15 min) → live proxy fallback; <b>stale banner showing → verify price in the Kalshi app before executing</b>. The floor only sees prints that reach a cache — a between-hours spike with no SPECI hides until the 6-hr group; that gap is the Termux 1-min alerter's job (tripwire, not settlement). Status: pending.
+      </div>
+    </details>
+
+    <details>
+      <summary style="font-weight:700;color:#eef3fa;cursor:pointer">6 · Claim hygiene</summary>
+      <div style="padding:5px 0 2px 2px">
+      Every empirical claim gets an n; new patterns enter provisional (n=1) and earn trust proportionally. Jul 2's "suppressed days bounce back warm" lean was n=1 — it pointed right, which was luck wearing a thesis costume. Amend rules here, in the file, with evidence — not in chat, not from memory.
+      </div>
+    </details>
+  </div>
+</div>
+
 <div class="panel" id="blip-panel">
   <div class="panel-head"><span>🔬 1-Min Blip Risk</span><span class="accent" id="blip-status">—</span></div>
   <div class="panel-body" id="blip-body"><div style="font-size:11px;color:#94a2b4">fetching one-minute archive…</div></div>
@@ -937,6 +1005,14 @@ function loadCalibOverrides() {
   try {
     const o = JSON.parse(localStorage.getItem("ksea_calib_v1") || "null");
     if (o && typeof o === "object") {
+      // one-time repair (2026-07-02): biasF had been cranked to 5 reacting to
+      // scorecard rows that graded RAW-ensemble locks as real calls. Measured
+      // marine-regime bias is 3.5 (n=4, user log). Per rules §2 the knob only
+      // moves again once the post-calib residual holds one sign at n≥8.
+      if (o.biasF === 5 && !o.biasRepair0702) {
+        o.biasF = 3.5; o.biasRepair0702 = true;
+        try { localStorage.setItem("ksea_calib_v1", JSON.stringify(o)); } catch (e2) {}
+      }
       if (typeof o.enabled === "boolean") CALIB.enabled = o.enabled;
       if (typeof o.biasF === "number" && isFinite(o.biasF)) CALIB.biasF = o.biasF;
     }
@@ -1154,6 +1230,7 @@ function getDayProjection(date) {
     nMembers: maxes.length,
     rawMedian, rawP10, rawP90, calInfo, calibrated: CALIB.enabled,
     ensembleMedian: median, climbInfo,   // expose both so UI can show the shift
+    samples: finalSamples,               // calibrated predictive samples — Kalshi EV engine rebuckets these
   };
 }
 
@@ -1939,6 +2016,55 @@ const AI_CALL_KEY = "ksea_ai_call_v1";
 function loadAICalls() { try { return JSON.parse(localStorage.getItem(AI_CALL_KEY) || "{}"); } catch (e) { return {}; } }
 function saveAICalls(o) { try { localStorage.setItem(AI_CALL_KEY, JSON.stringify(o)); } catch (e) {} }
 
+// One-time data repair (2026-07-02): the Jul 1 lock fired before calibration
+// existed, freezing the RAW ensemble (69–70) as "the call". The actual traded
+// read that day was 62 (user calibration log — ground truth). The bogus row
+// drove the RUNNING WARM banner and the biasF=5 overcorrection. Repair keeps
+// the original values for audit and never fires twice.
+function repairCallLog() {
+  const store = loadAICalls();
+  if (store._repair0702) return;
+  const c = store["2026-07-01"];
+  if (c && c.valid && typeof c.predHigh === "number" && c.predHigh >= 68) {
+    c.origPredHigh = c.predHigh; c.origLabel = c.callLabel;
+    c.predHigh = 62; c.callLabel = "61–62";
+    c.repaired = true;
+    c.rationale = "[repaired 2026-07-02: original lock " + c.origPredHigh +
+      "° / " + c.origLabel + " was the RAW ensemble — calibration didn't exist at lock time. " +
+      "Actual traded read was 62 per user log.] " + (c.rationale || "");
+  }
+  // backfill: the Jul 2 lock predates the provenance field but WAS calibrated
+  // (biasF 5 at lock, per its own rationale text) — keep it in the clean sample.
+  const c2 = store["2026-07-02"];
+  if (c2 && c2.valid && c2.calibApplied == null && /warm-bias correction/.test(c2.rationale || "")) {
+    c2.calibApplied = true; c2.biasFAtLock = 5;
+  }
+  store._repair0702 = true;
+  saveAICalls(store);
+}
+
+// Residual bias measured ONLY on locks that had calibration applied — the
+// clean sample the rules-§2 knob procedure (n≥8, one sign) reads from.
+// Legacy raw-ensemble locks are excluded by construction.
+function postCalibResidual() {
+  const calls = loadAICalls();
+  const off = (loadCLI().officials) || {};
+  const errs = [];
+  Object.keys(calls).forEach(d => {
+    const c = calls[d];
+    if (!c || !c.valid || !c.calibApplied || typeof c.predHigh !== "number") return;
+    const o = off[d];
+    if (!o || !o.final || typeof o.max !== "number") return;
+    errs.push(o.max - c.predHigh);
+  });
+  if (!errs.length) return null;
+  return {
+    n: errs.length,
+    bias: errs.reduce((a, b) => a + b, 0) / errs.length,
+    mae: errs.reduce((a, b) => a + Math.abs(b), 0) / errs.length,
+  };
+}
+
 const AI_LOCK_HOUR_PT = 10; // call freezes at the first refresh at/after 10:00 America/Los_Angeles
 function pacificNowParts() {
   try {
@@ -1989,6 +2115,10 @@ function computeAICall(date) {
     valid: true, date, lockedAt: new Date().toISOString(),
     predHigh, callLabel: topB.label, topProb, conf,
     p10: proj.p10, p90: proj.p90, peakBest, rationale: parts.join(" "),
+    // provenance — lets the residual grader use only honestly-calibrated locks
+    calibApplied: !!(proj.calibrated && proj.calInfo),
+    biasFAtLock: proj.calInfo ? proj.calInfo.biasF : null,
+    climbAtLock: !!proj.climbInfo,
   };
 }
 
@@ -2191,6 +2321,8 @@ async function fetchCLI(force) {
   saveCLI(cache);
   renderScorecard();
   try { renderFloor(); } catch (e) {}
+  try { settleTrades(); renderTrades(); } catch (e) {}
+  try { renderKalshi(); } catch (e) {}
   refreshAutoPeeks();
 }
 
@@ -2280,6 +2412,7 @@ async function fetchSpeci(force) {
   saveSpeci(cache);
   renderSpeci();
   try { renderFloor(); } catch (e) {}
+  try { renderKalshi(); } catch (e) {}
 }
 
 // =============================================================================
@@ -2647,6 +2780,7 @@ async function fetchSixHour(force) {
   if (typeof renderProjection === "function") try { renderProjection(); } catch (e) {}
   try { renderSixHr(); } catch (e) {}
   try { renderFloor(); } catch (e) {}
+  try { renderKalshi(); } catch (e) {}
   refreshAutoPeeks();
 }
 
@@ -2935,8 +3069,488 @@ function renderFloor() {
   if (st.banner) {
     html += `<div style="margin-top:8px;padding:6px 9px;background:rgba(252,211,77,0.08);border-left:2px solid #fcd34d;border-radius:4px;font-size:10px;line-height:1.5;color:#fde68a">${st.banner}</div>`;
   }
+  // liveness: distinguish "no newer print" from "fetch lane dead" — the Jul 2
+  // afternoon question ("is 12:53 really still the max, or did we stop hearing?")
+  let newestOb = 0;
+  try {
+    const scanT = (ms) => { if (isFinite(ms) && climateDayOfUTC(ms) === today && ms > newestOb) newestOb = ms; };
+    Object.keys((loadSixHr().tgroups) || {}).forEach(k => scanT(Date.parse(k)));
+    const soL = (loadSpeci().obs) || {};
+    Object.keys(soL).forEach(k => scanT(soL[k].t || Date.parse(k)));
+  } catch (e) {}
+  if (newestOb) {
+    const obAgeM = Math.round((Date.now() - newestOb) / 60000);
+    const lanesDead = pdtH >= 9 && pdtH < 18 && obAgeM > 90;
+    html += `<div style="margin-top:6px;font-size:9.5px;color:${lanesDead ? "#f87171" : "#7e8ea4"}">${lanesDead ? "⚠ " : ""}freshest settlement ob: ${obAgeM}m ago${lanesDead ? " — fetch lanes may be down; the floor could be STALE, not safe. Hourlies post ~:53." : ""}</div>`;
+  }
   html += `<div style="margin-top:7px;font-size:9px;color:#56657a">excluded by design: 1-min ASOS display (whole-°C — read 63° on Jun 30 vs T-group max 62.1°F → settled 62)</div>`;
   body.innerHTML = html;
+}
+
+// =============================================================================
+// KALSHI BOARD + MODEL EV — kills two error classes permanently:
+//  (1) bucket-structure errors: labels/bounds come from the live market, never
+//      from an assumed bin layout;
+//  (2) hand-waved edges: P(bucket) is computed from getDayProjection's
+//      calibrated predictive samples (ensemble + bias calib + observed-climb
+//      override), physically clamped by the settlement floor, and turned into
+//      net EV against actual bid/ask.
+// Data lane: kalshi.json committed by Actions (same repo as the app), with a
+// live CORS-proxied pull as fallback when the file is stale/missing.
+// =============================================================================
+const KALSHI_KEY = "ksea_kalshi_v1";
+function loadKalshi() { try { return JSON.parse(localStorage.getItem(KALSHI_KEY) || "{}"); } catch (e) { return {}; } }
+function saveKalshi(o) { try { localStorage.setItem(KALSHI_KEY, JSON.stringify(o)); } catch (e) {} }
+
+function kalshiDateCode() {
+  const p = pacificNowParts().date.split("-");
+  const mon = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][+p[1] - 1];
+  return p[0].slice(2) + mon + p[2];
+}
+
+// "66° to 67°" / "65° or below" / "74° or above" -> {lo, hi} (null = unbounded)
+function parseBucketLabel(label) {
+  const s = String(label || "").replace(/°/g, "");
+  let m = s.match(/(-?\d+)\s*or\s*below/i); if (m) return { lo: null, hi: +m[1] };
+  m = s.match(/(-?\d+)\s*or\s*above/i);     if (m) return { lo: +m[1], hi: null };
+  m = s.match(/(-?\d+)\s*to\s*(-?\d+)/i);   if (m) return { lo: +m[1], hi: +m[2] };
+  return null;
+}
+
+function kalshiCents(m, intField, dollarField) {
+  const v = m[intField];
+  if (typeof v === "number" && isFinite(v)) return Math.round(v);
+  const d = m[dollarField];
+  if (d != null && isFinite(parseFloat(d))) return Math.round(parseFloat(d) * 100);
+  return null;
+}
+
+// Normalize raw market objects (from kalshi.json OR the live API) into
+// {ticker,label,lo,hi,yesBid,yesAsk,noBid,noAsk,last,vol}, sorted cold→hot.
+function normalizeKalshi(markets) {
+  const out = [];
+  (markets || []).forEach(m => {
+    const label = m.label || m.yes_sub_title || m.subtitle || m.title || "";
+    let b = (m.lo !== undefined || m.hi !== undefined) ? { lo: m.lo ?? null, hi: m.hi ?? null } : null;
+    if (!b || (b.lo == null && b.hi == null)) b = parseBucketLabel(label);
+    if (!b && (m.floor_strike != null || m.cap_strike != null)) {
+      b = { lo: m.floor_strike != null ? Math.ceil(m.floor_strike) : null,
+            hi: m.cap_strike  != null ? Math.floor(m.cap_strike)  : null };
+    }
+    if (!b) return;   // unparseable market — skip rather than mis-trade it
+    out.push({
+      ticker: m.ticker, label: label || bucketLabelOf(b), lo: b.lo, hi: b.hi,
+      yesBid: kalshiCents(m, "yes_bid", "yes_bid_dollars"),
+      yesAsk: kalshiCents(m, "yes_ask", "yes_ask_dollars"),
+      noBid:  kalshiCents(m, "no_bid",  "no_bid_dollars"),
+      noAsk:  kalshiCents(m, "no_ask",  "no_ask_dollars"),
+      last:   kalshiCents(m, "last_price", "last_price_dollars"),
+      vol: typeof m.volume === "number" ? m.volume : parseFloat(m.volume_fp || m.volume) || null,
+    });
+  });
+  out.sort((a, b) => (a.lo ?? -999) - (b.lo ?? -999));
+  return out;
+}
+function bucketLabelOf(b) {
+  if (b.lo == null) return `${b.hi}° or below`;
+  if (b.hi == null) return `${b.lo}° or above`;
+  return `${b.lo}° to ${b.hi}°`;
+}
+
+async function fetchKalshi(force) {
+  const cache = loadKalshi();
+  const now = Date.now();
+  if (!force && cache.lastFetch && now - cache.lastFetch < 4 * 60 * 1000) return;
+  cache.lastFetch = now;
+  let data = null, lane = null;
+  // Lane 1: repo file (same origin on GitHub Pages, committed by Actions ~5 min)
+  try {
+    const r = await fetch("kalshi.json?ts=" + now, { cache: "no-store" });
+    if (r.ok) { const j = await r.json(); if (j && (j.markets || []).length) { data = j; lane = "repo"; } }
+  } catch (e) {}
+  // Lane 2: live API via CORS proxy — used when the repo file is missing or stale
+  const repoAge = data && data.fetched_utc ? now - Date.parse(data.fetched_utc) : Infinity;
+  if (!data || repoAge > 20 * 60 * 1000) {
+    try {
+      const dc = kalshiDateCode();
+      const api = "https://external-api.kalshi.com/trade-api/v2/markets?series_ticker=KXHIGHSEA&status=open&limit=200";
+      const r = await fetch("https://corsproxy.io/?url=" + encodeURIComponent(api));
+      if (r.ok) {
+        const j = await r.json();
+        const mk = (j.markets || []).filter(m => String(m.event_ticker || "").endsWith(dc));
+        if (mk.length) { data = { fetched_utc: new Date().toISOString(), markets: mk, event_ticker: mk[0].event_ticker }; lane = "live"; }
+      }
+    } catch (e) { if (!data) cache.error = String((e && e.message) || e); }
+  }
+  if (data) {
+    cache.data = { fetched_utc: data.fetched_utc, event_ticker: data.event_ticker, note: data.note || null };
+    cache.lane = lane; cache.error = null;
+    cache.norm = normalizeKalshi(data.markets);
+  } else if (!cache.norm) {
+    cache.error = cache.error || "kalshi.json missing and live lane returned no markets for today";
+  }
+  saveKalshi(cache);
+  try { renderKalshi(); } catch (e) {}
+  try { renderTrades(); } catch (e) {}
+}
+
+// --- model distribution on the LIVE bucket structure -------------------------
+// P(settle in bucket) from getDayProjection's calibrated samples, with the
+// left tail physically clamped: the day's max cannot be below tenths that
+// already printed on settlement-grade lanes (and CLI-so-far implies ≥ max-0.5).
+function kalshiModelDist(buckets) {
+  const today = pacificNowParts().date;
+  let proj = null;
+  try { proj = getDayProjection(today); } catch (e) {}
+  if (!proj || !proj.samples || !proj.samples.length) return null;
+  let clampF = null, clampSrc = null;
+  try {
+    const tm = floorTenthsMax();
+    if (tm && climateDayOfUTC(Date.now()) === climateDayOfUTC(tm.t)) { clampF = tm.f; clampSrc = tm.src; }
+    const off = loadCLI().officials || {};
+    const o = off[today];
+    if (o && typeof o.max === "number") {
+      const c = o.max - 0.45;
+      if (clampF == null || c > clampF) { clampF = c; clampSrc = o.final ? "official CLI" : "afternoon CLI"; }
+    }
+  } catch (e) {}
+  const samples = clampF == null ? proj.samples : proj.samples.map(s => s < clampF ? clampF : s);
+  const n = samples.length;
+  const probs = buckets.map(b => {
+    const lo = b.lo == null ? -Infinity : b.lo - 0.5;
+    const hi = b.hi == null ? Infinity : b.hi + 0.5;
+    let c = 0;
+    for (let i = 0; i < n; i++) { const s = samples[i]; if (s >= lo && s < hi) c++; }
+    return c / n;
+  });
+  return { probs, clampF, clampSrc, median: proj.median, climb: !!proj.climbInfo, nMembers: proj.nMembers };
+}
+
+// Kalshi taker fee estimate per contract, in cents: 7 · p · (1−p) · 100
+function kalshiFeeCents(px) {
+  if (px == null) return 0;
+  const p = px / 100;
+  return 7 * p * (1 - p);
+}
+
+// °F/hr over the most recent ~2h of settlement-grade prints (T-groups + SPECIs)
+function currentClimbPace() {
+  const today = climateDayOfUTC(Date.now());
+  const pts = [];
+  const add = (ms, f) => { if (isFinite(ms) && typeof f === "number" && climateDayOfUTC(ms) === today) pts.push([ms, f]); };
+  const tg = (loadSixHr().tgroups) || {};
+  Object.keys(tg).forEach(k => add(Date.parse(k), tg[k].f));
+  const so = (loadSpeci().obs) || {};
+  Object.keys(so).forEach(k => { const o = so[k]; add(o.t || Date.parse(k), o.tf); });
+  pts.sort((a, b) => a[0] - b[0]);
+  const recent = pts.filter(p => p[0] >= Date.now() - 2.25 * 3600e3);
+  if (recent.length < 2) return null;
+  const [t0, f0] = recent[0], [t1, f1] = recent[recent.length - 1];
+  if (t1 - t0 < 45 * 60e3) return null;
+  return (f1 - f0) / ((t1 - t0) / 3600e3);
+}
+
+function renderKalshi() {
+  const body = document.getElementById("kalshi-body");
+  const statusEl = document.getElementById("kalshi-status");
+  if (!body) return;
+  const cache = loadKalshi();
+  const rows = cache.norm || [];
+
+  if (!rows.length) {
+    body.innerHTML = `<div style="font-size:11px;color:${cache.error ? "#f87171" : "#94a2b4"};line-height:1.5">${
+      cache.error ? "Kalshi feed error: " + cache.error : "No board yet."
+    } <a href="#" onclick="fetchKalshi(true);return false" style="color:#60a5fa">↻ retry</a></div>`;
+    if (statusEl) { statusEl.textContent = cache.error ? "error" : "—"; statusEl.style.color = cache.error ? "#f87171" : "#94a2b4"; }
+    return;
+  }
+
+  const ageMin = cache.data && cache.data.fetched_utc ? (Date.now() - Date.parse(cache.data.fetched_utc)) / 60000 : null;
+  const stale = ageMin != null && ageMin > 12;
+  if (statusEl) {
+    statusEl.textContent = (cache.lane || "?") + (ageMin != null ? " · " + Math.round(ageMin) + "m" : "");
+    statusEl.style.color = stale ? "#fbbf24" : "#34d399";
+  }
+
+  const dist = kalshiModelDist(rows);
+  const floorNow = (() => { try { const sf = settlementFloor(); return sf ? sf.floor : null; } catch (e) { return null; } })();
+  const tn = (() => { try { return floorTenthsMax(); } catch (e) { return null; } })();
+  const pace = currentClimbPace();
+  const pacHr = insightPacHour();
+  const hoursLeft = Math.max(0.5, 17.5 - pacHr);   // effective heating horizon 5:30 PM
+
+  // best net-EV candidate across all buckets/sides
+  const calc = [];
+  rows.forEach((r, i) => {
+    const P = dist ? dist.probs[i] : null;
+    const evY = (P != null && r.yesAsk != null && r.yesAsk > 0) ? 100 * P - r.yesAsk - kalshiFeeCents(r.yesAsk) : null;
+    const evN = (P != null && r.noAsk != null && r.noAsk > 0) ? 100 * (1 - P) - r.noAsk - kalshiFeeCents(r.noAsk) : null;
+    calc.push({ r, P, evY, evN, i });
+  });
+  window.__kalshiCalc = calc;   // trade form reads EV from here at entry time
+  let best = null;
+  calc.forEach(c => {
+    [["yes", c.evY], ["no", c.evN]].forEach(([side, ev]) => {
+      if (ev != null && ev >= 8 && (!best || ev > best.ev)) best = { i: c.i, side, ev };
+    });
+  });
+
+  let html = "";
+  if (stale) html += `<div style="margin-bottom:7px;padding:5px 8px;background:rgba(251,191,36,0.08);border-left:2px solid #fbbf24;border-radius:4px;font-size:10px;color:#fde68a">⚠ Quotes ${Math.round(ageMin)} min old — verify on the Kalshi app before pulling the trigger.</div>`;
+
+  calc.forEach(c => {
+    const r = c.r;
+    const dead = floorNow != null && r.hi != null && r.hi < floorNow;
+    const pinned = floorNow != null && (r.lo == null || r.lo <= floorNow) && (r.hi == null || floorNow <= r.hi);
+    const isBest = best && best.i === c.i;
+    const evTxt = (v) => v == null ? "—" : `<b style="color:${v >= 8 ? "#34d399" : v >= 0 ? "#cdd9e8" : "#f87171"}">${v >= 0 ? "+" : ""}${v.toFixed(1)}¢</b>`;
+
+    // auto fork line per bucket
+    let fork = "";
+    if (dead) {
+      fork = (r.yesBid != null && r.yesBid >= 3)
+        ? `<span style="color:#f87171">DEAD — settle can't land here; YES still bid ${r.yesBid}¢ → free fade</span>`
+        : `<span style="color:#f87171">DEAD</span> <span style="color:#56657a">— floor ${floorNow}° passed it</span>`;
+    } else if (tn && r.lo != null && (floorNow == null || r.lo > floorNow)) {
+      const flipC = flipThresholdC(r.lo - 1);
+      const flipF = +(flipC * 1.8 + 32).toFixed(1);
+      const needPace = (flipF - tn.f) / hoursLeft;
+      const verdict = needPace <= 0 ? `<span style="color:#34d399">reached</span>`
+        : pace == null ? `<span style="color:#7e8ea4">needs ${needPace.toFixed(1)}°/hr (pace unknown)</span>`
+        : needPace <= pace * 0.8 ? `<span style="color:#34d399">on pace (${pace.toFixed(1)}°/hr obs)</span>`
+        : needPace <= pace * 1.5 ? `<span style="color:#fbbf24">live — needs ${needPace.toFixed(1)}°/hr vs ${pace.toFixed(1)} obs</span>`
+        : `<span style="color:#f87171">needs ${needPace.toFixed(1)}°/hr vs ${pace.toFixed(1)} obs — needs a break</span>`;
+      fork = `reach: print ≥ <b style="color:#fcd34d">${flipC.toFixed(1)}°C</b> (${flipF.toFixed(1)}°F) · ${verdict}`;
+    } else if (tn && pinned && r.hi != null) {
+      const flipC = flipThresholdC(r.hi);
+      fork = `holds if day max stays <b style="color:#fcd34d">&lt; ${flipC.toFixed(1)}°C</b> — climb must stop`;
+    } else if (tn && r.lo == null && r.hi != null) {
+      const flipC = flipThresholdC(r.hi);
+      fork = `holds if day max stays <b style="color:#fcd34d">&lt; ${flipC.toFixed(1)}°C</b> (${(+(flipC * 1.8 + 32)).toFixed(1)}°F)`;
+    }
+
+    html += `<div style="padding:7px 8px;margin-bottom:5px;border-radius:6px;border:1px solid ${isBest ? "#fcd34d" : dead ? "rgba(248,113,113,0.45)" : "rgba(255,255,255,0.09)"};background:${isBest ? "rgba(252,211,77,0.07)" : "rgba(255,255,255,0.02)"}">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;font-variant-numeric:tabular-nums">
+        <span style="font-size:12.5px;font-weight:700;color:#eef3fa">${r.label}${isBest ? ` <span style="font-size:9px;color:#fcd34d">★ BEST EV (${best.side.toUpperCase()})</span>` : ""}</span>
+        <span style="font-size:11px;color:#94a2b4">yes ${r.yesBid ?? "—"}/${r.yesAsk ?? "—"}¢ · P <b style="color:#eef3fa">${c.P != null ? (c.P * 100).toFixed(0) + "%" : "—"}</b> · EV y ${evTxt(c.evY)} n ${evTxt(c.evN)}</span>
+      </div>
+      ${fork ? `<div style="margin-top:4px;font-size:10px;color:#94a2b4;line-height:1.5">${fork}</div>` : ""}
+    </div>`;
+  });
+
+  // model provenance + residual grade — the honesty footer
+  let foot = "";
+  if (dist) {
+    foot += `model: ${dist.nMembers} members${dist.climb ? " + observed-climb anchor" : " (no climb anchor yet)"} · median ${dist.median.toFixed(1)}°F`;
+    if (dist.clampF != null) foot += ` · left tail clamped at ${dist.clampF.toFixed(1)}°F (${dist.clampSrc})`;
+  } else {
+    foot += "model warming up — no ensemble samples yet; prices shown raw";
+  }
+  try {
+    const pc = postCalibResidual();
+    if (pc) {
+      foot += `<br>post-calib residual: bias ${pc.bias >= 0 ? "+" : ""}${pc.bias.toFixed(1)}° · MAE ${pc.mae.toFixed(1)}° · n=${pc.n}${pc.n < 8 ? " ⚠ knob stays put until n≥8, one sign (rules §2)" : ""}`;
+    } else {
+      const g = gradeScore().stats;
+      if (g.n && g.bias != null && g.mae != null) foot += `<br>residual (mixed provenance — includes pre-calib raw locks): bias ${g.bias >= 0 ? "+" : ""}${g.bias.toFixed(1)}° · MAE ${g.mae.toFixed(1)}° · n=${g.n}`;
+    }
+  } catch (e) {}
+  foot += `<br>net EV includes ~7·p·(1−p)¢ taker fee · eff. heating horizon 5:30 PM (late prints to 6:30 happen — n=2) · <a href="#" onclick="fetchKalshi(true);return false" style="color:#60a5fa">↻ refresh</a>`;
+  html += `<div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.6">${foot}</div>`;
+  body.innerHTML = html;
+}
+
+// =============================================================================
+// TRADE LOG — logs the trade AND the model's stated edge at entry, then grades
+// realized vs stated when the CLI settles. Forecast calibration and edge
+// calibration are different numbers; this measures the second one.
+// =============================================================================
+const TRADES_KEY = "ksea_trades_v1";
+function loadTrades() { try { return JSON.parse(localStorage.getItem(TRADES_KEY) || "[]"); } catch (e) { return []; } }
+function saveTrades(a) { try { localStorage.setItem(TRADES_KEY, JSON.stringify(a)); } catch (e) {} }
+
+function addTradeFromForm() {
+  const sel = document.getElementById("trade-mkt");
+  const side = document.getElementById("trade-side").value;
+  const px = parseInt(document.getElementById("trade-px").value, 10);
+  const qty = parseInt(document.getElementById("trade-qty").value, 10);
+  const calc = window.__kalshiCalc || [];
+  const c = calc[parseInt(sel && sel.value, 10)];
+  if (!c || !(px >= 1 && px <= 99) || !(qty >= 1)) { alert("Need a bucket, a price 1–99¢, and a quantity."); return; }
+  const trades = loadTrades();
+  trades.unshift({
+    id: Date.now(), date: pacificNowParts().date, t: Date.now(),
+    label: c.r.label, lo: c.r.lo, hi: c.r.hi, ticker: c.r.ticker || null,
+    side, px, qty,
+    evStated: side === "yes" ? c.evY : c.evN,   // the model's claim, frozen at entry
+    pStated: c.P, open: true,
+  });
+  saveTrades(trades);
+  renderTrades();
+}
+
+function closeTrade(id) {
+  const trades = loadTrades();
+  const tr = trades.find(x => x.id === id);
+  if (!tr || !tr.open) return;
+  const v = prompt(`Exit price for ${tr.side.toUpperCase()} ${tr.label} (¢, entered ${tr.px}¢):`);
+  const px = parseInt(v, 10);
+  if (!(px >= 0 && px <= 100)) return;
+  tr.open = false; tr.exitPx = px; tr.closedBy = "manual";
+  tr.pnl = Math.round(tr.qty * ((px - tr.px) - kalshiFeeCents(tr.px) - (px > 0 && px < 100 ? kalshiFeeCents(px) : 0)));
+  saveTrades(trades); renderTrades();
+}
+
+// Auto-settle open trades once the final CLI for their date exists.
+function settleTrades() {
+  const trades = loadTrades();
+  const off = (loadCLI().officials) || {};
+  let changed = false;
+  trades.forEach(tr => {
+    if (!tr.open) return;
+    const o = off[tr.date];
+    if (!o || !o.final || typeof o.max !== "number") return;
+    const S = o.max;
+    const inB = (tr.lo == null || S >= tr.lo) && (tr.hi == null || S <= tr.hi);
+    const win = tr.side === "yes" ? inB : !inB;
+    tr.open = false; tr.settled = S; tr.closedBy = "settle";
+    tr.pnl = Math.round(tr.qty * (((win ? 100 : 0) - tr.px) - kalshiFeeCents(tr.px)));
+    changed = true;
+  });
+  if (changed) saveTrades(trades);
+  return changed;
+}
+
+function renderTrades() {
+  const body = document.getElementById("trades-body");
+  const statusEl = document.getElementById("trades-status");
+  if (!body) return;
+  settleTrades();
+  const trades = loadTrades();
+  const open = trades.filter(t => t.open);
+  const closed = trades.filter(t => !t.open);
+
+  // entry form from the live board
+  const calc = window.__kalshiCalc || [];
+  let form;
+  if (calc.length) {
+    const opts = calc.map((c, i) => `<option value="${i}">${c.r.label}</option>`).join("");
+    form = `<div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center">
+      <select id="trade-mkt" style="flex:2;min-width:110px;background:#0f1722;color:#eef3fa;border:1px solid rgba(255,255,255,0.15);border-radius:5px;padding:5px;font-size:11px">${opts}</select>
+      <select id="trade-side" style="background:#0f1722;color:#eef3fa;border:1px solid rgba(255,255,255,0.15);border-radius:5px;padding:5px;font-size:11px"><option value="yes">YES</option><option value="no">NO</option></select>
+      <input id="trade-px" type="number" min="1" max="99" placeholder="¢" style="width:48px;background:#0f1722;color:#eef3fa;border:1px solid rgba(255,255,255,0.15);border-radius:5px;padding:5px;font-size:11px">
+      <input id="trade-qty" type="number" min="1" placeholder="qty" style="width:52px;background:#0f1722;color:#eef3fa;border:1px solid rgba(255,255,255,0.15);border-radius:5px;padding:5px;font-size:11px">
+      <button onclick="addTradeFromForm()" style="background:rgba(96,165,250,0.15);color:#93c5fd;border:1px solid #60a5fa;border-radius:5px;padding:5px 10px;font-size:11px;cursor:pointer">log</button>
+    </div>
+    <div style="margin-top:4px;font-size:9px;color:#56657a">model EV at entry is stamped on the trade automatically — that's the number we grade later.</div>`;
+  } else {
+    form = `<div style="font-size:10.5px;color:#94a2b4">Load the Kalshi board first — the form fills from it.</div>`;
+  }
+
+  let html = form;
+  const fmtPnl = p => `<b style="color:${p >= 0 ? "#34d399" : "#f87171"}">${p >= 0 ? "+" : "−"}$${Math.abs(p / 100).toFixed(2)}</b>`;
+
+  if (open.length) {
+    html += `<div style="margin-top:9px;border-top:1px solid rgba(255,255,255,0.08);padding-top:7px">`;
+    open.forEach(tr => {
+      html += `<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:10.5px;padding:3px 0;font-variant-numeric:tabular-nums;color:#cdd9e8">
+        <span><b style="color:${tr.side === "yes" ? "#34d399" : "#f87171"}">${tr.side.toUpperCase()}</b> ${tr.label} · ${tr.qty}@${tr.px}¢${tr.evStated != null ? ` <span style="color:#7e8ea4">(EV ${tr.evStated >= 0 ? "+" : ""}${tr.evStated.toFixed(1)}¢)</span>` : ""}</span>
+        <a href="#" onclick="closeTrade(${tr.id});return false" style="color:#60a5fa;font-size:10px">close</a>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  if (closed.length) {
+    html += `<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:7px">`;
+    closed.slice(0, 6).forEach(tr => {
+      html += `<div style="display:flex;justify-content:space-between;font-size:10px;padding:2.5px 0;font-variant-numeric:tabular-nums;color:#94a2b4">
+        <span>${fmtDateShort(tr.date)} ${tr.side.toUpperCase()} ${tr.label} ${tr.qty}@${tr.px}¢ ${tr.closedBy === "settle" ? "→ set " + tr.settled + "°" : "→ out " + tr.exitPx + "¢"}</span>
+        <span>${fmtPnl(tr.pnl || 0)}</span>
+      </div>`;
+    });
+    const tot = closed.reduce((a, t) => a + (t.pnl || 0), 0);
+    const graded = closed.filter(t => t.evStated != null && t.closedBy === "settle");
+    let edgeLine = "";
+    if (graded.length) {
+      const stated = graded.reduce((a, t) => a + t.evStated, 0) / graded.length;
+      const realized = graded.reduce((a, t) => a + (t.pnl || 0) / t.qty, 0) / graded.length;
+      edgeLine = ` · edge stated <b style="color:#dbe4f0">${stated >= 0 ? "+" : ""}${stated.toFixed(1)}¢</b> vs realized <b style="color:#dbe4f0">${realized >= 0 ? "+" : ""}${realized.toFixed(1)}¢</b>/contract (n=${graded.length}${graded.length < 10 ? " ⚠" : ""})`;
+    }
+    html += `<div style="margin-top:6px;font-size:10px;color:#94a2b4">realized: ${fmtPnl(tot)} over ${closed.length} closed${edgeLine}</div></div>`;
+  }
+
+  if (statusEl) {
+    statusEl.textContent = open.length ? open.length + " open" : (closed.length ? "flat" : "—");
+    statusEl.style.color = open.length ? "#fbbf24" : "#94a2b4";
+  }
+  body.innerHTML = html;
+}
+
+// =============================================================================
+// BACKUP — the cal log, grades, trades, and floor state all live in
+// localStorage; one browser data-clear erases the ground truth everything else
+// calibrates against. Export dumps every ksea_* key EXCEPT the Synoptic token
+// (the backup may get committed to a public repo — never put the paid token
+// in it; re-enter that by hand after an import).
+// =============================================================================
+const BACKUP_META_KEY = "ksea_backup_meta_v1";
+function exportBackup() {
+  const dump = { exported: new Date().toISOString(), app: "ksea", keys: {} };
+  Object.keys(localStorage).forEach(k => {
+    if (k.indexOf("ksea") === 0 && k !== "ksea_synoptic_token") dump.keys[k] = localStorage.getItem(k);
+  });
+  const blob = new Blob([JSON.stringify(dump, null, 1)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `ksea_backup_${pacificNowParts().date}.json`;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 3000);
+  try { localStorage.setItem(BACKUP_META_KEY, JSON.stringify({ lastExport: Date.now(), keys: Object.keys(dump.keys).length })); } catch (e) {}
+  renderBackup();
+}
+function importBackup(ev) {
+  const f = ev.target.files && ev.target.files[0];
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    try {
+      const d = JSON.parse(rd.result);
+      const keys = d.keys || {};
+      let n = 0;
+      Object.keys(keys).forEach(k => {
+        if (k.indexOf("ksea") === 0 && k !== "ksea_synoptic_token") { localStorage.setItem(k, keys[k]); n++; }
+      });
+      alert(`Restored ${n} keys. Synoptic token is never in backups — re-enter it if needed.`);
+      try { renderAll(); } catch (e) {}
+    } catch (e) { alert("Import failed: " + e); }
+    ev.target.value = "";
+  };
+  rd.readAsText(f);
+}
+function renderBackup() {
+  const body = document.getElementById("backup-body");
+  const statusEl = document.getElementById("backup-status");
+  if (!body) return;
+  let meta = {};
+  try { meta = JSON.parse(localStorage.getItem(BACKUP_META_KEY) || "{}"); } catch (e) {}
+  const days = meta.lastExport ? (Date.now() - meta.lastExport) / 86400e3 : null;
+  const overdue = days == null || days > 7;
+  if (statusEl) {
+    statusEl.textContent = days == null ? "never" : days < 1 ? "today" : Math.floor(days) + "d ago";
+    statusEl.style.color = overdue ? "#f87171" : "#34d399";
+  }
+  body.innerHTML = `
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button onclick="exportBackup()" style="background:rgba(52,211,153,0.12);color:#a7f3d0;border:1px solid #34d399;border-radius:5px;padding:6px 12px;font-size:11px;cursor:pointer">⬇ export all app state</button>
+      <label style="background:rgba(96,165,250,0.12);color:#93c5fd;border:1px solid #60a5fa;border-radius:5px;padding:6px 12px;font-size:11px;cursor:pointer">⬆ import<input type="file" accept="application/json" onchange="importBackup(event)" style="display:none"></label>
+    </div>
+    <div style="margin-top:7px;font-size:10px;line-height:1.6;color:${overdue ? "#f87171" : "#94a2b4"}">${
+      days == null ? "⚠ Never exported — the cal log, grades, floor state, and trades live only in this browser."
+      : days > 7 ? `⚠ Last export ${Math.floor(days)} days ago — the log has grown since.`
+      : `Last export ${days < 1 ? "today" : Math.floor(days) + " days ago"} (${meta.keys || "?"} keys).`
+    }</div>
+    <div style="margin-top:5px;font-size:9px;color:#56657a;line-height:1.5">Drop the file in the repo as <b>cal_backup.json</b> if you want it versioned. The Synoptic token is deliberately excluded — never commit it to a public repo.</div>`;
 }
 
 function gradeScore() {
@@ -3265,7 +3879,12 @@ function refreshAutoPeeks() {
     const el = p.querySelector(".panel-peek");
     if (!el) return;
     if (p.id === "map-panel") { el.textContent = "tap to expand the station map"; return; }
-    const body = p.querySelector(".panel-body");
+    // :scope > … — the panels are nested in places, and a bare querySelector
+    // walks into the innermost child panel's body (all four outer panels were
+    // previewing the 6-hr panel's text). Own direct child only.
+    let body = null;
+    try { body = p.querySelector(":scope > .panel-body"); } catch (e) {}
+    if (!body) { for (const ch of p.children) if (ch.classList && ch.classList.contains("panel-body")) { body = ch; break; } }
     const t = (body ? body.textContent : "").trim().replace(/\s+/g, " ");
     el.textContent = t ? (t.length > 120 ? t.slice(0, 120) + "…" : t) : "";
   });
@@ -3842,6 +4461,9 @@ function renderAll() {
   renderEdge();
   renderScorecard();
   try { renderFloor(); } catch (e) {}
+  try { renderKalshi(); } catch (e) {}
+  try { renderTrades(); } catch (e) {}
+  try { renderBackup(); } catch (e) {}
   renderBlip();
   renderLive1m();
   renderConditions();
@@ -4545,9 +5167,16 @@ function renderPace() {
   todayObs.forEach(r => { if (r.tempF < low) { low = r.tempF; lowT = r.time; } });
   const climbed = currentF - low;
 
-  // daily high so far — settlement reads the MAX, not the current temp. This is the projection floor.
-  let dayHigh = currentF;
-  todayObs.forEach(r => { if (r.tempF > dayHigh) dayHigh = r.tempF; });
+  // daily high so far — settlement reads the MAX of the SETTLEMENT lanes
+  // (T-groups/SPECI/day-safe 6-hr). The display history ran 3° hot on Jul 2
+  // ("high already 68.0" while the printed max was 64.9) — a lane violation.
+  // Display max is only the fallback before the first print, and says so.
+  let dayHigh = currentF, dayHighLane = "display lane — no settlement print yet";
+  try {
+    const tm = floorTenthsMax();
+    if (tm) { dayHigh = tm.f; dayHighLane = tm.src; }
+    else { todayObs.forEach(r => { if (r.tempF > dayHigh) dayHigh = r.tempF; }); }
+  } catch (e) { todayObs.forEach(r => { if (r.tempF > dayHigh) dayHigh = r.tempF; }); }
 
   // least-squares slope (°/hr) over a set of rows
   const lsSlope = rows => {
@@ -4573,41 +5202,65 @@ function renderPace() {
   const rate = (recentRate != null) ? recentRate : windowRate;
   const decel = (windowRate != null && recentRate != null) ? (windowRate - recentRate) : 0;
 
-  // target bucket (locked call, else projection)
-  const aiCall = getLockedAICall(state.selectedDate);
-  const origEst = (aiCall && aiCall.valid) ? aiCall.predHigh
-    : Math.round((day.proj && day.proj.median != null) ? day.proj.median : currentF);
-  let callLo;
-  {
-    const m = String((aiCall && aiCall.valid && aiCall.callLabel) || "").match(/(\d+)\s*[-\u2013]\s*(\d+)/);
-    callLo = m ? parseInt(m[1], 10) : (origEst % 2 === 0 ? origEst - 1 : origEst);
+  // target bucket: live board's model-favorite first (real Kalshi bounds),
+  // locked-call bin only as fallback. The old path chased the call's internal
+  // odd-low bin — on Jul 2 that meant rate math for a bucket that was already
+  // DEAD and didn't exist on the board.
+  let tgt = null, tgtSrc = "";
+  const __kc = window.__kalshiCalc;
+  if (__kc && __kc.length) {
+    let bi = -1;
+    for (let i = 0; i < __kc.length; i++) if (__kc[i].P != null && (bi < 0 || __kc[i].P > __kc[bi].P)) bi = i;
+    if (bi >= 0) { tgt = __kc[bi].r; tgtSrc = "board \u00b7 model-favorite"; }
   }
-  const label = `${callLo}-${callLo + 1}\u00b0`;
-  const needT = callLo - 0.5, capT = callLo + 1.5;
+  const aiCall = getLockedAICall(state.selectedDate);
+  let label, needT, capT, deadTgt = false;
+  if (tgt) {
+    label = tgt.label;
+    needT = tgt.lo == null ? -9999 : tgt.lo - 0.5;
+    capT  = tgt.hi == null ?  9999 : tgt.hi + 0.5;
+    try { const sf = settlementFloor(); if (sf && tgt.hi != null && tgt.hi < sf.floor) deadTgt = true; } catch (e) {}
+  } else {
+    const origEst = (aiCall && aiCall.valid) ? aiCall.predHigh
+      : Math.round((day.proj && day.proj.median != null) ? day.proj.median : currentF);
+    let callLo;
+    {
+      const m = String((aiCall && aiCall.valid && aiCall.callLabel) || "").match(/(\d+)\s*[-\u2013]\s*(\d+)/);
+      callLo = m ? parseInt(m[1], 10) : (origEst % 2 === 0 ? origEst - 1 : origEst);
+    }
+    label = `${callLo}-${callLo + 1}\u00b0`; tgtSrc = "locked call \u00b7 board not loaded";
+    needT = callLo - 0.5; capT = callLo + 1.5;
+  }
 
   // forecast peak hour
   let pkHr = -1, pkT = -999;
   (day.hourly || []).forEach(h => { if (h.temp > pkT) { pkT = h.temp; pkHr = h.hour; } });
   if (pkHr < 0) pkHr = 16;
-  const hrsLeft = Math.max(0, pkHr - pacificHour);
+  const effPk = Math.max(pkHr, 17.5);   // forecast peak, floored at the 5:30 PM effective horizon (rules \u00a73)
+  const hrsLeft = Math.max(0, effPk - pacificHour);
   const fmtT = d => d ? new Date(d).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }) : "";
   const needRate = hrsLeft > 0.2 ? (needT - currentF) / hrsLeft : null;
-  const pkLabel = `${pkHr > 12 ? pkHr - 12 : pkHr} ${pkHr >= 12 ? "PM" : "AM"}`;
+  const __pkH = Math.floor(effPk), __pkM = Math.round((effPk % 1) * 60);
+  const pkLabel = `${__pkH > 12 ? __pkH - 12 : __pkH}${__pkM ? ":" + String(__pkM).padStart(2, "0") : ""} ${__pkH >= 12 ? "PM" : "AM"}`;
   const nearPeak = hrsLeft <= 2.5;  // inside the diurnal roll-off — linear extrapolation overshoots here
 
   let html = `<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:11px;color:#cdd6e4">
     <div><span style="color:#7e8ea4">climbed today</span><br><b style="font-size:17px;color:#eef3fa">${climbed >= 0 ? "+" : ""}${climbed.toFixed(1)}\u00b0</b><br><span style="font-size:9px;color:#5d6c81">${low.toFixed(1)}\u00b0${lowT ? ` @ ${fmtT(lowT)}` : ""} \u2192 ${currentF.toFixed(1)}\u00b0 now</span></div>
     <div><span style="color:#7e8ea4">pace (recent)</span><br><b style="font-size:17px;color:${decel > 0.5 && nearPeak ? "#fbbf24" : "#eef3fa"}">${rate != null ? (rate >= 0 ? "+" : "") + rate.toFixed(1) + "\u00b0/hr" : "\u2014"}</b><br><span style="font-size:9px;color:#5d6c81">${recentRate != null ? `last ~${Math.round(spanMin(win25))}m` : windowRate != null ? `90m fallback` : `need ~${Math.max(5, Math.round(30 - rateSpan))}m more obs`}${windowRate != null ? ` \u00b7 90m: ${windowRate >= 0 ? "+" : ""}${windowRate.toFixed(1)}` : ""}</span></div>
-    <div><span style="color:#7e8ea4">needed for ${label}</span><br><b style="font-size:17px;color:#eef3fa">${needRate != null ? (needRate >= 0 ? "+" : "") + needRate.toFixed(1) + "\u00b0/hr" : "\u2014"}</b><br><span style="font-size:9px;color:#5d6c81">${(needT - currentF) >= 0 ? "+" : ""}${(needT - currentF).toFixed(1)}\u00b0 by ~${pkLabel}</span></div>
-  </div>`;
+    <div><span style="color:#7e8ea4">needed for ${label}</span><br><b style="font-size:17px;color:#eef3fa">${needT < -9000 ? "in" : needRate != null ? (needRate >= 0 ? "+" : "") + needRate.toFixed(1) + "\u00b0/hr" : "\u2014"}</b><br><span style="font-size:9px;color:#5d6c81">${needT < -9000 ? "already inside \u2014 holding is the question" : `${(needT - currentF) >= 0 ? "+" : ""}${(needT - currentF).toFixed(1)}\u00b0 by ~${pkLabel}`}</span></div>
+  </div>
+  <div style="margin-top:5px;font-size:9px;color:#56657a">verdict lane: <b>${dayHighLane}</b> \u00b7 target: ${tgtSrc}</div>`;
 
   let verdict = "", color = "#9ca3af", stat = "\u2014";
-  if (dayHigh >= capT) {
-    verdict = `\u2b06 <b>High already at ${dayHigh.toFixed(1)}\u00b0 \u2014 past the top of ${label}.</b> The day's max is locked above your bucket; it can't come back down. Upper bins are the live question now.`;
+  if (deadTgt) {
+    verdict = `\u2620 <b>${label} is DEAD</b> \u2014 the settlement floor already passed its top. No rate math resurrects it; the live question moved up a bucket.`;
+    color = "#f87171"; stat = "DEAD";
+  } else if (dayHigh >= capT) {
+    verdict = `\u2b06 <b>Printed max ${dayHigh.toFixed(1)}\u00b0 (${dayHighLane}) \u2014 past the top of ${label}.</b> Settlement reads the max; it can't come back down. Upper bins are the live question now.`;
     color = "#f87171"; stat = "OVER";
   } else if (hrsLeft <= 0.2) {
-    if (dayHigh >= needT) { verdict = `\u2705 <b>Inside ${label} at the peak hour</b> (high ${dayHigh.toFixed(1)}\u00b0). Question flips to overshoot: ${(capT - dayHigh).toFixed(1)}\u00b0 of headroom before it escapes out the top.`; color = "#34d399"; stat = "IN RANGE"; }
-    else { verdict = `\u23f3 <b>Past the typical peak and ${(needT - dayHigh).toFixed(1)}\u00b0 short</b> (high ${dayHigh.toFixed(1)}\u00b0). Making ${label} now needs an unusual late push.`; color = "#fbbf24"; stat = "SHORT"; }
+    if (dayHigh >= needT) { verdict = `\u2705 <b>Inside ${label} at the horizon</b> (printed max ${dayHigh.toFixed(1)}\u00b0, ${dayHighLane}). ${capT >= 9000 ? "Top bucket \u2014 no ceiling above; it holds." : `Question flips to overshoot: ${(capT - dayHigh).toFixed(1)}\u00b0 of headroom before it escapes out the top.`}`; color = "#34d399"; stat = "IN RANGE"; }
+    else { verdict = `\u23f3 <b>Past the effective horizon and ${(needT - dayHigh).toFixed(1)}\u00b0 short</b> (printed max ${dayHigh.toFixed(1)}\u00b0). Making ${label} now needs an exceptional late print \u2014 they exist (n=2) but don't lean on one.`; color = "#fbbf24"; stat = "SHORT"; }
   } else if (rate == null) {
     verdict = `Pace verdict arrives once ~30 min of recent observations exist.`;
     stat = "warming up";
@@ -5371,6 +6024,7 @@ document.addEventListener("visibilitychange", () => {
     fetchSixHour();
   }
 });
+try { repairCallLog(); } catch (e) {}   // one-time call-log repair — must precede first grade/render
 refresh();
 setInterval(refresh, 300_000); // refresh every 5 min (model data doesn't change faster)
 fetchCLI();                       // official climate reports: on load…
@@ -5380,6 +6034,8 @@ setInterval(() => fetchBlip(), 1_800_000); // …then every 30 min (archive lags
 setInterval(() => pollLive1m(), 15_000);
 fetchSpeci();                              // SPECI watch: on load…
 setInterval(() => fetchSpeci(), 45_000);   // …then every 45s (catch off-cycle specials)
+fetchKalshi();                             // Kalshi board: on load…
+setInterval(() => fetchKalshi(), 300_000); // …then every 5 min (matches the Actions cadence)
 fetchSixHour();                            // METAR 6-hr precise group: on load…
 setInterval(() => fetchSixHour(), 1_200_000); // …baseline every 20 min
 setInterval(() => {                           // burst window: METARs publish ~:53-:00, grab tenths within minutes
