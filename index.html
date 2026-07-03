@@ -453,7 +453,7 @@
     <details style="margin-bottom:6px">
       <summary style="font-weight:700;color:#eef3fa;cursor:pointer">2 · Forecast — the machine makes the number</summary>
       <div style="padding:5px 0 2px 2px">
-      getDayProjection (ensemble → bias calib → climb override) is the forecast; observed-climb anchoring cut MAE 3.38°→1.45°, buckets 0/8→4/8 (n=8). The Kalshi panel rebuckets its samples onto the <b>live board</b>, clamps the left tail at printed tenths, prices net EV after fees. <b>Chat's role is veto only</b> — regime breaks the model can't see; say why, log it. Historic warm bias +3–4°F in marine regimes (n=4, one cold miss Jul 1) now lives <b>inside CALIB — never re-apply by hand</b>. Touch CALIB.biasF only when the settle-graded residual holds one sign for n≥8.
+      getDayProjection (ensemble → bias calib → climb override) is the forecast; observed-climb anchoring cut MAE 3.38°→1.45°, buckets 0/8→4/8 (n=8). The Kalshi panel rebuckets its samples onto the <b>live board</b>, clamps the left tail at printed tenths, prices net EV after fees. <b>Chat's role is veto only</b> — regime breaks the model can't see; say why, log it. Historic warm bias +3–4°F in marine regimes (n=4, one cold miss Jul 1) now lives <b>inside CALIB — never re-apply by hand</b>. Touch CALIB.biasF only when the settle-graded residual holds one sign for n≥8. <b>Model Council</b> (HRRR/NBM/ECMWF/GFS, added Jul 2 pm): nudges the pre-climb projection toward multi-model agreement (w=0.35, clamp ±2°, <b>provisional n=0</b>) and widens the band on disagreement. The tradeable signal is <b>HRRR−NBM ≥ 2°</b> — short-range physics vs the blend the market anchors on. Morning snapshots are frozen at 11 AM and graded per-model at settle; weights get earned or fired at n≥8, never tuned by feel. Reforecast datasets / reanalysis / model-versioning infra: wrong tool for a phone app — the live council log IS our reforecast, built one settle at a time.
       </div>
     </details>
 
@@ -514,6 +514,123 @@ const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&lon
   + `&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=${TZ}&forecast_days=7`;
 const ENSEMBLE_URL = `https://ensemble-api.open-meteo.com/v1/ensemble?latitude=${LAT}&longitude=${LON}`
   + `&hourly=temperature_2m&models=gfs_seamless&temperature_unit=fahrenheit&timezone=${TZ}&forecast_days=7`;
+
+// ---- MODEL COUNCIL: HRRR (3km rapid-refresh, sees the marine deck physically),
+// ECMWF IFS, NBM (what NWS point forecasts — and therefore the market anchor —
+// lean on), and GFS as the ensemble's deterministic sibling. The council does
+// two jobs: (a) nudge the projection toward multi-model agreement, (b) flag
+// HRRR-vs-NBM divergence — "the blend is about to be wrong" — which is the
+// tradeable signal. Weights are PROVISIONAL (n=0) and earned via the council
+// log, graded at CLI settle.
+const COUNCIL_MODELS = ["ncep_hrrr_conus", "ecmwf_ifs025", "ncep_nbm_conus", "gfs_seamless"];
+const COUNCIL_SAFE   = ["ecmwf_ifs025", "gfs_seamless"];   // retry subset if an ID 400s
+const COUNCIL_LABEL  = { ncep_hrrr_conus: "HRRR", ecmwf_ifs025: "ECMWF", ncep_nbm_conus: "NBM", gfs_seamless: "GFS" };
+const COUNCIL_W = 0.35;          // provisional nudge weight toward council median
+const COUNCIL_CLAMP = 2.0;       // max °F the council may move the projection
+const councilUrl = models => `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
+  + `&hourly=temperature_2m&models=${models.join(",")}&temperature_unit=fahrenheit&timezone=${TZ}&forecast_days=3`;
+const COUNCIL_KEY = "ksea_council_v1";
+function loadCouncil() { try { return JSON.parse(localStorage.getItem(COUNCIL_KEY) || "{}"); } catch (e) { return {}; } }
+function saveCouncil(o) { try { localStorage.setItem(COUNCIL_KEY, JSON.stringify(o)); } catch (e) {} }
+
+async function fetchCouncil() {
+  const tryFetch = async models => {
+    const r = await fetch(councilUrl(models));
+    const j = await r.json();
+    if (j && j.error) throw new Error(j.reason || "council request rejected");
+    if (!r.ok) throw new Error("council " + r.status);
+    return j;
+  };
+  try { return await tryFetch(COUNCIL_MODELS); }
+  catch (e) {
+    try { return await tryFetch(COUNCIL_SAFE); }   // one wrong ID must not kill the lane
+    catch (e2) { throw e; }
+  }
+}
+
+// Parse multi-model hourly payload → per-date per-model daily max (°F).
+// With multiple models Open-Meteo suffixes fields: temperature_2m_ncep_hrrr_conus.
+// HRRR only covers ~2 days; require ≥18 valid hours before a model votes on a date.
+function processCouncil(json) {
+  if (!json || !json.hourly || !Array.isArray(json.hourly.time)) return;
+  const H = json.hourly, times = H.time;
+  const byDate = {};
+  COUNCIL_MODELS.forEach(id => {
+    const arr = H["temperature_2m_" + id] || (COUNCIL_MODELS.length === 1 ? H.temperature_2m : null);
+    if (!Array.isArray(arr)) return;
+    const daily = {};
+    for (let i = 0; i < times.length; i++) {
+      const v = arr[i];
+      if (v == null || !isFinite(v)) continue;
+      const d = String(times[i]).slice(0, 10);
+      (daily[d] = daily[d] || []).push(v);
+    }
+    Object.keys(daily).forEach(d => {
+      if (daily[d].length < 18) return;
+      (byDate[d] = byDate[d] || {}).models = byDate[d].models || {};
+      byDate[d].models[COUNCIL_LABEL[id]] = Math.max(...daily[d]);
+    });
+  });
+  Object.keys(byDate).forEach(d => {
+    const m = byDate[d].models, vals = Object.values(m).sort((a, b) => a - b);
+    if (!vals.length) { delete byDate[d]; return; }
+    byDate[d].median = vals.length % 2 ? vals[(vals.length - 1) / 2] : (vals[vals.length / 2 - 1] + vals[vals.length / 2]) / 2;
+    byDate[d].spread = vals[vals.length - 1] - vals[0];
+    byDate[d].hrrrNbm   = (m.HRRR != null && m.NBM != null)   ? m.HRRR - m.NBM   : null;
+    byDate[d].hrrrEcmwf = (m.HRRR != null && m.ECMWF != null) ? m.HRRR - m.ECMWF : null;
+  });
+  state.council = { t: Date.now(), byDate };
+
+  // freeze a morning snapshot per date for honest grading: updates until 11 AM
+  // Pacific, frozen after — so we grade what the council said BEFORE the day
+  // showed its hand, not a 4 PM view.
+  try {
+    const st = loadCouncil(); st.snapshots = st.snapshots || {};
+    const pac = pacificNowParts();
+    const today = pac.date;
+    if (byDate[today] && (!st.snapshots[today] || pac.hour < 11)) {
+      st.snapshots[today] = { lockedAt: new Date().toISOString(), models: byDate[today].models };
+      saveCouncil(st);
+    }
+  } catch (e) {}
+}
+
+function councilForDate(date) {
+  if (!state.council || !state.council.byDate) return null;
+  const c = state.council.byDate[date];
+  if (!c) return null;
+  return Object.assign({ fresh: Date.now() - state.council.t < 6 * 3600e3 }, c);
+}
+
+// Grade morning snapshots against final CLI settles → per-model bias/MAE.
+// This is the "earn the weights" path: reforecast discipline with live data.
+function gradeCouncil() {
+  const st = loadCouncil();
+  if (!st.snapshots) return null;
+  const off = (loadCLI().officials) || {};
+  st.graded = st.graded || [];
+  const have = new Set(st.graded.map(g => g.date));
+  let changed = false;
+  Object.keys(st.snapshots).forEach(d => {
+    if (have.has(d)) return;
+    const o = off[d];
+    if (!o || !o.final || typeof o.max !== "number") return;
+    const errs = {};
+    Object.keys(st.snapshots[d].models).forEach(k => { errs[k] = +(o.max - st.snapshots[d].models[k]).toFixed(1); });
+    st.graded.push({ date: d, settle: o.max, errs });
+    changed = true;
+  });
+  if (st.graded.length > 60) st.graded = st.graded.slice(-60);
+  if (changed) saveCouncil(st);
+  const sum = {};
+  st.graded.forEach(g => Object.keys(g.errs).forEach(k => {
+    (sum[k] = sum[k] || { n: 0, tot: 0, abs: 0 });
+    sum[k].n++; sum[k].tot += g.errs[k]; sum[k].abs += Math.abs(g.errs[k]);
+  }));
+  const out = {};
+  Object.keys(sum).forEach(k => out[k] = { n: sum[k].n, bias: sum[k].tot / sum[k].n, mae: sum[k].abs / sum[k].n });
+  return Object.keys(out).length ? out : null;
+}
 
 // Buckets are generated per-day, centered on that day's projected high,
 // in 2°F bins matching Kalshi's odd-start structure (e.g. 81-82, 83-84).
@@ -580,9 +697,10 @@ const quantile = (sorted, q) => {
 const MODEL_CACHE_KEY = "ksea_model_cache_v1";
 
 async function fetchAll() {
-  const [fRes, eRes] = await Promise.allSettled([
+  const [fRes, eRes, cRes] = await Promise.allSettled([
     fetch(FORECAST_URL).then(r => { if (!r.ok) throw new Error("forecast " + r.status); return r.json(); }),
     fetch(ENSEMBLE_URL).then(r => { if (!r.ok) throw new Error("ensemble " + r.status); return r.json(); }),
+    fetchCouncil(),
   ]);
 
   // Model feeds: network first, last-good cache second (≤24h). The Jul 2 night
@@ -611,14 +729,20 @@ async function fetchAll() {
   if (ensembleJson) processEnsemble(ensembleJson);
   else state.nMembers = 0;  // deterministic + synthetic spread
 
+  // council: network → cache fallback; a dead council is a degraded nudge, never an error
+  let councilJson = cRes.status === "fulfilled" ? cRes.value : null;
+  if (!councilJson && mcFresh && mc.council) councilJson = mc.council;
+  try { if (councilJson) processCouncil(councilJson); } catch (e) {}
+
   // persist last-good network payloads (never re-save cache-served data)
   if (fRes.status === "fulfilled") {
     try {
-      const dump = { t: Date.now(), forecast: fRes.value, ensemble: null };
+      const dump = { t: Date.now(), forecast: fRes.value, ensemble: null, council: null };
       if (eRes.status === "fulfilled") {
         const es = JSON.stringify(eRes.value);
         if (es.length < 2000000) dump.ensemble = eRes.value;   // quota guard
       }
+      if (cRes.status === "fulfilled") dump.council = cRes.value;   // small payload
       localStorage.setItem(MODEL_CACHE_KEY, JSON.stringify(dump));
     } catch (e) { /* quota — next save will be deterministic-only */ }
   }
@@ -1218,6 +1342,25 @@ function getDayProjection(date) {
     calInfo = { biasF: CALIB.biasF, targetStd, memberStd, season: seasonOf(date), lead: leadIndexOf(date) };
   }
 
+  // ---- MODEL COUNCIL nudge: shift toward multi-model agreement, widen on
+  // disagreement. Feeds the MODEL side; the observed-climb blend still takes
+  // over as the day develops (obs beat every model, n=8). Weight 0.35, clamp
+  // ±2° — provisional (n=0), earned or fired by the council log at settle. ----
+  let councilInfo = null;
+  try {
+    const cn = councilForDate(date);
+    if (cn && cn.fresh && cn.median != null) {
+      const calSorted = [...calMaxes].sort((a, b) => a - b);
+      const ensMed = quantile(calSorted, 0.5);
+      const gap = cn.median - ensMed;
+      const shift = Math.max(-COUNCIL_CLAMP, Math.min(COUNCIL_CLAMP, COUNCIL_W * gap));
+      if (Math.abs(shift) > 0.05) calMaxes = calMaxes.map(v => v + shift);
+      if (cn.spread != null && cn.spread > 2) kernelStd *= 1 + Math.min(0.5, (cn.spread - 2) * 0.15);
+      councilInfo = { gap: +gap.toFixed(1), shift: +shift.toFixed(1), spread: cn.spread != null ? +cn.spread.toFixed(1) : null,
+                      hrrrNbm: cn.hrrrNbm != null ? +cn.hrrrNbm.toFixed(1) : null, models: cn.models };
+    }
+  } catch (e) {}
+
   // ---- predictive distribution (shape-preserving) drives median, band, buckets ----
   const samples = predictiveSamples(calMaxes, kernelStd, 12000);
   const sSorted = samples.slice().sort((a,b)=>a-b);
@@ -1264,6 +1407,7 @@ function getDayProjection(date) {
     nMembers: maxes.length,
     rawMedian, rawP10, rawP90, calInfo, calibrated: CALIB.enabled,
     ensembleMedian: median, climbInfo,   // expose both so UI can show the shift
+    councilInfo,                         // multi-model nudge provenance
     samples: finalSamples,               // calibrated predictive samples — Kalshi EV engine rebuckets these
   };
 }
@@ -1629,6 +1773,51 @@ function renderProjection() {
       </div>
     `;
   }
+  try { renderCouncilStrip(proj); } catch (e) {}
+}
+
+// ---- Model Council strip: lives inside the High Projection panel ----
+function renderCouncilStrip(proj) {
+  let el = document.getElementById("council-strip");
+  if (!el) {
+    const host = document.getElementById("proj-stats");
+    if (!host || !host.parentElement) return;
+    el = document.createElement("div");
+    el.id = "council-strip";
+    host.parentElement.insertBefore(el, host.nextSibling);
+  }
+  const cn = councilForDate(state.selectedDate);
+  if (!cn || !cn.models || !Object.keys(cn.models).length) { el.innerHTML = ""; return; }
+
+  const order = ["HRRR", "NBM", "ECMWF", "GFS"];
+  const chips = order.filter(k => cn.models[k] != null).map(k =>
+    `<span style="display:inline-block;padding:3px 8px;margin:2px 3px 2px 0;border:1px solid rgba(255,255,255,0.14);border-radius:5px;font-size:10.5px;font-variant-numeric:tabular-nums;color:#eef3fa"><b style="color:#93c5fd">${k}</b> ${cn.models[k].toFixed(1)}°</span>`).join("");
+
+  let flag = "";
+  if (cn.hrrrNbm != null && Math.abs(cn.hrrrNbm) >= 2) {
+    const cold = cn.hrrrNbm < 0;
+    flag = `<div style="margin-top:5px;padding:5px 8px;background:rgba(${cold ? "96,165,250" : "251,191,36"},0.10);border-left:2px solid ${cold ? "#60a5fa" : "#fbbf24"};border-radius:4px;font-size:10px;line-height:1.55;color:${cold ? "#bfdbfe" : "#fde68a"}">⚑ <b>Blend-miss flag:</b> HRRR sits ${Math.abs(cn.hrrrNbm).toFixed(1)}° ${cold ? "UNDER" : "OVER"} NBM. Short-range physics disagrees with the blend the market anchors on — ${cold ? "the deck says colder; NWS/market likely warm" : "mixing says hotter; NWS/market likely cold"}. Provisional signal, n builds at settle.</div>`;
+  } else if (cn.spread != null && cn.spread >= 3) {
+    flag = `<div style="margin-top:5px;font-size:10px;color:#fbbf24">council spread ${cn.spread.toFixed(1)}° — models disagree, band widened.</div>`;
+  }
+
+  const ci = proj && proj.councilInfo;
+  const nudge = ci && ci.shift ? `nudge ${ci.shift > 0 ? "+" : ""}${ci.shift.toFixed(1)}° into projection (w=${COUNCIL_W}, clamp ±${COUNCIL_CLAMP}°, provisional)` : "no nudge applied";
+
+  let gradeLine = "";
+  try {
+    const g = gradeCouncil();
+    if (g) {
+      gradeLine = "council log: " + Object.keys(g).map(k => `${k} ${g[k].bias >= 0 ? "+" : ""}${g[k].bias.toFixed(1)}°/${g[k].mae.toFixed(1)} (n=${g[k].n})`).join(" · ");
+    } else gradeLine = "council log: no graded days yet — weights are unearned until n≥8";
+  } catch (e) {}
+
+  el.innerHTML = `<div style="margin-top:9px;padding-top:7px;border-top:1px solid rgba(255,255,255,0.08)">
+    <div style="font-size:10px;letter-spacing:0.8px;color:#7e8ea4;margin-bottom:4px">MODEL COUNCIL · day max by model</div>
+    <div>${chips}<span style="font-size:10px;color:#94a2b4;margin-left:4px">median ${cn.median.toFixed(1)}° · spread ${cn.spread != null ? cn.spread.toFixed(1) : "—"}°</span></div>
+    ${flag}
+    <div style="margin-top:4px;font-size:9px;line-height:1.5;color:#56657a">${nudge} · obs-climb still overrides as the day develops · <span style="color:#7e8ea4">${gradeLine}</span></div>
+  </div>`;
 }
 
 function renderBuckets() {
@@ -2357,6 +2546,7 @@ async function fetchCLI(force) {
   renderScorecard();
   try { renderFloor(); } catch (e) {}
   try { settleTrades(); renderTrades(); } catch (e) {}
+  try { gradeCouncil(); } catch (e) {}
   try { renderKalshi(); } catch (e) {}
   refreshAutoPeeks();
 }
