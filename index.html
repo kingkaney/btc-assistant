@@ -577,27 +577,60 @@ const quantile = (sorted, q) => {
 // =============================================================================
 // Fetch + process
 // =============================================================================
+const MODEL_CACHE_KEY = "ksea_model_cache_v1";
+
 async function fetchAll() {
   const [fRes, eRes] = await Promise.allSettled([
     fetch(FORECAST_URL).then(r => { if (!r.ok) throw new Error("forecast " + r.status); return r.json(); }),
     fetch(ENSEMBLE_URL).then(r => { if (!r.ok) throw new Error("ensemble " + r.status); return r.json(); }),
   ]);
 
-  if (fRes.status !== "fulfilled") throw new Error(fRes.reason?.message || "forecast failed");
-  processForecast(fRes.value);
+  // Model feeds: network first, last-good cache second (≤24h). The Jul 2 night
+  // failure: one Open-Meteo outage blanked state.days and took every
+  // date-keyed panel down with it — including panels that only needed
+  // localStorage. A stale model beats no model, loudly labeled.
+  let mc = null;
+  try { mc = JSON.parse(localStorage.getItem(MODEL_CACHE_KEY) || "null"); } catch (e) {}
+  const mcFresh = mc && mc.t && Date.now() - mc.t < 24 * 3600e3;
 
-  if (eRes.status === "fulfilled") {
-    processEnsemble(eRes.value);
-  } else {
-    state.nMembers = 0;  // will fall back to deterministic + synthetic spread
+  state.modelStaleMin = null;
+  let forecastJson = fRes.status === "fulfilled" ? fRes.value : null;
+  let ensembleJson = eRes.status === "fulfilled" ? eRes.value : null;
+  if (!forecastJson && mcFresh && mc.forecast) {
+    forecastJson = mc.forecast;
+    state.modelStaleMin = (Date.now() - mc.t) / 60000;
+  }
+  if (!ensembleJson && mcFresh && mc.ensemble) {
+    ensembleJson = mc.ensemble;
+    if (state.modelStaleMin == null) state.modelStaleMin = (Date.now() - mc.t) / 60000;
   }
 
-  // Override Open-Meteo's grid "current" with REAL ASOS observation.
-  // Pull api.weather.gov + Synoptic-KSEA + nearby networks in parallel, then use
-  // whichever live reading has the newest timestamp (freshest-wins).
-  const [live, nearby, , synK] = await Promise.all([
+  if (!forecastJson) throw new Error((fRes.reason && fRes.reason.message ? fRes.reason.message : "forecast failed") + " — no usable cache");
+  processForecast(forecastJson);
+
+  if (ensembleJson) processEnsemble(ensembleJson);
+  else state.nMembers = 0;  // deterministic + synthetic spread
+
+  // persist last-good network payloads (never re-save cache-served data)
+  if (fRes.status === "fulfilled") {
+    try {
+      const dump = { t: Date.now(), forecast: fRes.value, ensemble: null };
+      if (eRes.status === "fulfilled") {
+        const es = JSON.stringify(eRes.value);
+        if (es.length < 2000000) dump.ensemble = eRes.value;   // quota guard
+      }
+      localStorage.setItem(MODEL_CACHE_KEY, JSON.stringify(dump));
+    } catch (e) { /* quota — next save will be deterministic-only */ }
+  }
+
+  // Live obs: best-effort, NEVER fatal. This was Promise.all — one Synoptic
+  // rejection at 9 PM threw away a perfectly good model fetch.
+  const obsRes = await Promise.allSettled([
     fetchLiveObs(), fetchNearbyStations(), fetchSynopticNearby(), fetchSynopticKSEA()
   ]);
+  const live   = obsRes[0].status === "fulfilled" ? obsRes[0].value : null;
+  const nearby = obsRes[1].status === "fulfilled" ? obsRes[1].value : null;
+  const synK   = obsRes[3].status === "fulfilled" ? obsRes[3].value : null;
 
   let best = null, bestSrc = null;
   if (live && live.latest && live.latest.tempF != null) { best = live.latest; bestSrc = live.source; }
@@ -618,7 +651,7 @@ async function fetchAll() {
   } else {
     state.obsHistory = null;
   }
-  state.nearbyStations = nearby;
+  state.nearbyStations = nearby || state.nearbyStations || {};
 }
 
 // Nearby airport ASOS stations — same NWS API as KSEA. Used as freshness
@@ -939,6 +972,7 @@ function processForecast(j) {
     detMin: D.temperature_2m_min[idx],
   }));
   if (!state.selectedDate && state.days.length) state.selectedDate = state.days[0].date;
+  if (!state.selectedDate) { try { state.selectedDate = pacificNowParts().date; } catch (e) {} }  // date-keyed panels must survive a dead model feed
 }
 
 function processEnsemble(j) {
@@ -1735,6 +1769,7 @@ function renderStatus() {
   const errEl = document.getElementById("error");
   if (state.error) { dot.className="dot err"; label.textContent="feed err"; }
   else if (state.loading) { dot.className="dot load"; label.textContent="loading"; }
+  else if (state.modelStaleMin != null) { dot.className="dot load"; label.textContent=`model cached ${state.modelStaleMin < 90 ? Math.round(state.modelStaleMin) + "m" : (state.modelStaleMin / 60).toFixed(1) + "h"}`; }
   else { dot.className="dot live"; label.textContent="live"; }
   if (state.lastFetch) fetchAge.textContent = `fetched ${Math.floor((Date.now()-state.lastFetch)/1000)}s ago`;
   mem.textContent = state.nMembers ? `${state.nMembers} ens members` : "deterministic only";
@@ -3208,6 +3243,10 @@ async function fetchKalshi(force) {
   const cache = loadKalshi();
   const now = Date.now();
   if (!force && cache.lastFetch && now - cache.lastFetch < 4 * 60 * 1000) return;
+  // exponential backoff after consecutive dead cycles: 4m → 8m → 16m → 30m cap.
+  // Without this the corsproxy lane got hammered every 5 min all day and
+  // plausibly helped exhaust the shared proxy quota the METAR fast lane uses.
+  if (!force && cache.fails && cache.nextTry && now < cache.nextTry) return;
   cache.lastFetch = now;
   let data = null, lane = null;
   // Lane 1: repo file (same origin on GitHub Pages, committed by Actions ~5 min)
@@ -3217,7 +3256,8 @@ async function fetchKalshi(force) {
   } catch (e) {}
   // Lane 2: live API via CORS proxy — used when the repo file is missing or stale
   const repoAge = data && data.fetched_utc ? now - Date.parse(data.fetched_utc) : Infinity;
-  if (!data || repoAge > 20 * 60 * 1000) {
+  const pacH = (() => { try { return pacificNowParts().hour; } catch (e) { return 12; } })();
+  if ((!data || repoAge > 20 * 60 * 1000) && pacH >= 5 && pacH < 21) {
     try {
       const dc = kalshiDateCode();
       const api = "https://external-api.kalshi.com/trade-api/v2/markets?series_ticker=KXHIGHSEA&status=open&limit=200";
@@ -3233,8 +3273,11 @@ async function fetchKalshi(force) {
     cache.data = { fetched_utc: data.fetched_utc, event_ticker: data.event_ticker, note: data.note || null };
     cache.lane = lane; cache.error = null;
     cache.norm = normalizeKalshi(data.markets);
-  } else if (!cache.norm) {
-    cache.error = cache.error || "kalshi.json missing and live lane returned no markets for today";
+    cache.fails = 0; cache.nextTry = null;
+  } else {
+    cache.fails = (cache.fails || 0) + 1;
+    cache.nextTry = now + Math.min(30 * 60000, 4 * 60000 * Math.pow(2, cache.fails - 1));
+    if (!cache.norm) cache.error = cache.error || "kalshi.json missing and live lane returned no markets for today";
   }
   saveKalshi(cache);
   try { renderKalshi(); } catch (e) {}
@@ -4504,37 +4547,19 @@ function renderDrift() {
 }
 
 function renderAll() {
-  renderStatus();
-  renderDayStrip();
-  renderProjection();
-  renderAICall();
-  renderDrift();
-  renderEdge();
-  renderScorecard();
-  try { renderFloor(); } catch (e) {}
-  try { renderKalshi(); } catch (e) {}
-  try { renderTrades(); } catch (e) {}
-  try { renderBackup(); } catch (e) {}
-  renderBlip();
-  renderLive1m();
-  renderConditions();
-  setTimeout(refreshAutoPeeks, 0);
-  renderNearbyStations();
-  renderSynopticStations();
-  renderStationDots();
-  renderNowcast();
-  renderPace();
-  renderSpeci();
-  renderInsights();
-  renderSixHr();
-  renderSkycams();
-  renderBuckets();
-  renderChart();
-  renderCurrent();
-  renderAlertsSummary();
-  renderCalLogStatus();
-  renderCalibPanel();
-  renderAccLogStatus();
+  // Every panel is crash-isolated. Pre-Jul-2, one renderer throwing on a
+  // missing day object silently killed everything after it in this list.
+  const seq = [
+    renderStatus, renderDayStrip, renderProjection, renderAICall, renderDrift,
+    renderEdge, renderScorecard, renderFloor, renderKalshi, renderTrades,
+    renderBackup, renderBlip, renderLive1m, renderConditions,
+    renderNearbyStations, renderSynopticStations, renderStationDots,
+    renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr,
+    renderSkycams, renderBuckets, renderChart, renderCurrent,
+    renderAlertsSummary, renderCalLogStatus, renderCalibPanel, renderAccLogStatus,
+  ];
+  seq.forEach(fn => { try { fn(); } catch (e) { try { console.warn("panel render failed:", fn.name, e); } catch (e2) {} } });
+  setTimeout(() => { try { refreshAutoPeeks(); } catch (e) {} }, 0);
 }
 
 // =============================================================================
