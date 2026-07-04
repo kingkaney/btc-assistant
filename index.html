@@ -445,7 +445,7 @@
 
 <!-- RULES: the playbook. Single source of truth — when a chat call contradicts this, THIS wins. -->
 <div class="panel" id="rules-panel">
-  <div class="panel-head"><span>📖 Rules</span><span class="accent" style="color:#94a2b4">amended 2026-07-02 pm</span></div>
+  <div class="panel-head"><span>📖 Rules</span><span class="accent" style="color:#94a2b4">amended 2026-07-03</span></div>
   <div class="panel-body" style="font-size:10.5px;line-height:1.65;color:#cdd9e8">
     <div style="font-size:9.5px;color:#7e8ea4;margin-bottom:7px">Every claim carries n = settled days behind it. n&lt;8 = provisional. Chat contradicts this panel → this panel wins until deliberately amended (edit here, commit).</div>
 
@@ -459,14 +459,14 @@
     <details style="margin-bottom:6px">
       <summary style="font-weight:700;color:#eef3fa;cursor:pointer">2 · Forecast — the machine makes the number</summary>
       <div style="padding:5px 0 2px 2px">
-      getDayProjection (ensemble → bias calib → climb override) is the forecast; observed-climb anchoring cut MAE 3.38°→1.45°, buckets 0/8→4/8 (n=8). The Kalshi panel rebuckets its samples onto the <b>live board</b>, clamps the left tail at printed tenths, prices net EV after fees. <b>Chat's role is veto only</b> — regime breaks the model can't see; say why, log it. Historic warm bias +3–4°F in marine regimes (n=4, one cold miss Jul 1) now lives <b>inside CALIB — never re-apply by hand</b>. Touch CALIB.biasF only when the settle-graded residual holds one sign for n≥8. <b>Model Council</b> (HRRR/NBM/ECMWF/GFS, added Jul 2 pm): nudges the pre-climb projection toward multi-model agreement (w=0.35, clamp ±2°, <b>provisional n=0</b>) and widens the band on disagreement. The tradeable signal is <b>HRRR−NBM ≥ 2°</b> — short-range physics vs the blend the market anchors on. Morning snapshots are frozen at 11 AM and graded per-model at settle; weights get earned or fired at n≥8, never tuned by feel. Reforecast datasets / reanalysis / model-versioning infra: wrong tool for a phone app — the live council log IS our reforecast, built one settle at a time.
+      getDayProjection (ensemble → bias calib → climb override) is the forecast; observed-climb anchoring cut MAE 3.38°→1.45°, buckets 0/8→4/8 (n=8). The Kalshi panel rebuckets its samples onto the <b>live board</b>, clamps the left tail at printed tenths, prices net EV after fees. <b>Chat's role is veto only</b> — regime breaks the model can't see; say why, log it. Historic warm bias +3–4°F in marine regimes (n=4, one cold miss Jul 1) now lives <b>inside CALIB — never re-apply by hand</b>. Touch CALIB.biasF only when the settle-graded residual holds one sign for n≥8. <b>Model Council</b> (HRRR/NBM/ECMWF/GFS, added Jul 2 pm): nudges the pre-climb projection toward multi-model agreement (w=0.35, clamp ±2°, <b>provisional n=0</b>) and widens the band on disagreement. The tradeable signal is <b>HRRR−NBM ≥ 2°</b> — short-range physics vs the blend the market anchors on. Morning snapshots are frozen at 11 AM and graded per-model at settle; weights get earned or fired at n≥8, never tuned by feel. Reforecast datasets / reanalysis / model-versioning infra: wrong tool for a phone app — the live council log IS our reforecast, built one settle at a time. <b>THE 4:53 REVEAL (n=1158, split 30/28)</b>: the 23Z 6-hr group beats the visible hourly tape ≥0.6°C on 29% of days, median +0.5°C — before 4:53 the bucket above the visible max is structurally underpriced by hourly-watchers; after, the information is spent. <b>FLIP MORNINGS (n=156, split 75/74)</b>: OVC@10 after a hot day or clear@10 after a cool day → ≥5°F jump probability 74% vs 42% base, direction given by the flip. Persistence is otherwise real (anomaly r=0.63) — trust the anchor EXCEPT on flip mornings.
       </div>
     </details>
 
     <details style="margin-bottom:6px">
       <summary style="font-weight:700;color:#eef3fa;cursor:pointer">3 · Intraday reads</summary>
       <div style="padding:5px 0 2px 2px">
-      Arbiter = <b>T-group climb rate</b>, never sky photos (they whipsaw). Layered break (BKN under OVC) ≠ break; single-layer OVC→BKN→SCT is genuine. <b>Solar-noon rule is a deck diagnostic, not a heating clock</b> (corrected Jul 2): flat climb + <i>intact</i> OVC after max insolation ⇒ ceiling probably in (provisional n≈3) — but KSEA heats to <b>5–6:30 PM</b> and late spike prints are real (n=2). <b>Never declare a settle before the 5–6 PM prints clear.</b> Fork table uses a 5:30 effective horizon with this caveat attached.
+      Arbiter = <b>T-group climb rate</b>, never sky photos (they whipsaw). Layered break (BKN under OVC) ≠ break; single-layer OVC→BKN→SCT is genuine. <b>THE CLOCK RULE (n=20, Jun 10–Jul 2 log audit): nothing top-side is dead before 6:15 PM PDT.</b> Daily max printed after 4 PM on 70% of days, after 5 PM on 30%, latest ~6:05. Fork/pace horizons use 6:15. <b>Deck diagnostic REFUTED (Jul 3 audit):</b> "flat climb + intact OVC after max insolation caps the ceiling" went 0-for-2 in its own dataset (Jun 26 rose +2.6° after, Jul 2 rose +5.4° after). Do not use it. The clock decides when you're safe, not the sky. <b>Late escapes past 6:15 are a MARINE-day phenomenon</b>: cool-anomaly days 3.0% vs hot days 0.5% (n=1190) — the gray days are the dangerous ones, not the scorchers.
       </div>
     </details>
 
@@ -511,7 +511,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-03.5";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-03.7";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -1780,6 +1780,7 @@ function renderProjection() {
       </div>
     `;
   }
+  try { renderFlipStrip(); } catch (e) {}
   try { renderCouncilStrip(proj); } catch (e) {}
 }
 
@@ -2655,6 +2656,8 @@ async function fetchSpeci(force) {
   renderSpeci();
   try { renderFloor(); } catch (e) {}
   try { renderKalshi(); } catch (e) {}
+  try { revealWatch(); } catch (e) {}
+  try { flipMorningCheck(); } catch (e) {}
 }
 
 // =============================================================================
@@ -3027,6 +3030,7 @@ async function fetchSixHour(force) {
   try { renderSixHr(); } catch (e) {}
   try { renderFloor(); } catch (e) {}
   try { renderKalshi(); } catch (e) {}
+  try { revealWatch(); } catch (e) {}
   refreshAutoPeeks();
 }
 
@@ -3266,6 +3270,119 @@ function laneDivergence() {
   } catch (e) { return null; }
 }
 
+// =============================================================================
+// THE 4:53 REVEAL + FLIP MORNINGS — the two split-half-validated tells from
+// the 2013–2026 5-min archive (Jul 3 deep dive, n-tags inline).
+//  · Reveal: the 23Z 6-hr max group (~4:53 PM) beats the visible hourly tape
+//    by ≥0.6°C on 29% of days, median +0.5°C (n=1158, odd/even 30%/28%).
+//  · Flip mornings: OVC@10 after a hot day, or clear@10 after a cool day →
+//    P(|anomaly jump| ≥5°F) = 74% vs 42% base (n=156, split 75%/74%).
+// KSEA_NORMALS is the same climatology those findings were measured against.
+// =============================================================================
+const KSEA_NORMALS = {"150":68.6,"151":68.8,"152":69.0,"153":69.1,"154":69.1,"155":69.2,"156":69.4,"157":69.5,"158":69.5,"159":69.5,"160":69.7,"161":70.0,"162":70.2,"163":70.4,"164":70.5,"165":71.0,"166":71.6,"167":72.0,"168":72.3,"169":72.5,"170":72.7,"171":73.1,"172":73.4,"173":73.5,"174":73.5,"175":73.9,"176":74.3,"177":74.7,"178":74.9,"179":75.3,"180":75.7,"181":75.8,"182":76.1,"183":76.4,"184":76.6,"185":76.8,"186":76.9,"187":77.0,"188":77.0,"189":77.0,"190":77.2,"191":77.2,"192":77.5,"193":77.8,"194":78.0,"195":78.3,"196":78.6,"197":78.8,"198":78.9,"199":79.3,"200":79.6,"201":79.9,"202":80.2,"203":80.2,"204":80.2,"205":80.2,"206":80.3,"207":80.3,"208":80.3,"209":80.3,"210":80.4,"211":80.6,"212":80.7,"213":80.6,"214":80.6,"215":80.8,"216":80.9,"217":81.0,"218":80.8,"219":80.8,"220":80.5,"221":80.3,"222":80.1,"223":80.0,"224":79.9,"225":79.6,"226":79.5,"227":79.3,"228":79.2,"229":79.2,"230":79.2,"231":79.0,"232":78.7,"233":78.5,"234":78.3,"235":78.3,"236":78.1,"237":77.9,"238":77.7,"239":77.6,"240":77.4,"241":77.2,"242":77.0,"243":76.7,"244":76.4,"245":76.1,"246":75.9,"247":75.6,"248":75.3,"249":74.9,"250":74.5,"251":73.9,"252":73.6,"253":73.3,"254":73.1,"255":72.7,"256":72.1,"257":71.8,"258":71.5,"259":71.1,"260":70.7,"261":70.4,"262":69.9,"263":69.5,"264":69.2,"265":68.9,"266":68.6,"267":68.2,"268":67.8,"269":67.6,"270":67.4,"271":67.1,"272":66.9,"273":66.5,"274":66.2,"275":65.7};
+const REVEAL_KEY = "ksea_reveal_v1";
+const FLIP_KEY = "ksea_flip_v1";
+
+function doyOf(dateStr) {
+  const p = dateStr.split("-").map(Number);
+  return Math.round((Date.UTC(p[0], p[1] - 1, p[2]) - Date.UTC(p[0], 0, 0)) / 86400000);
+}
+function normalMaxF(dateStr) {
+  const doy = doyOf(dateStr);
+  for (let off = 0; off <= 5; off++) {
+    if (KSEA_NORMALS[doy - off] != null) return KSEA_NORMALS[doy - off];
+    if (KSEA_NORMALS[doy + off] != null) return KSEA_NORMALS[doy + off];
+  }
+  return null;
+}
+
+// ---- 4:53 reveal: heads-up before the 23Z print, grade it when it lands ----
+function revealWatch() {
+  const pac = pacificNowParts();
+  let st = {}; try { st = JSON.parse(localStorage.getItem(REVEAL_KEY) || "{}"); } catch (e) {}
+  if (st.day !== pac.date) st = { day: pac.date };
+  const saveR = () => { try { localStorage.setItem(REVEAL_KEY, JSON.stringify(st)); } catch (e) {} };
+  const h = insightPacHour();
+
+  if (!st.warned && h >= 16.66 && h < 16.89) {
+    const tm = floorTenthsMax();
+    if (tm) {
+      st.warned = true; st.visC = tm.c; st.visF = tm.f; saveR();
+      const above = Math.round(tm.f) + 1;
+      try { if (alertsEnabled()) triggerAlert("23Z Reveal", `⏱ 6-hr max prints ~4:53. Visible tape max ${tm.c.toFixed(1)}°C (${tm.f.toFixed(1)}°F). History: the print beats the tape ≥0.6°C on 29% of days, median +0.5°C (n=1158) — the ${above}°+ side is the underpriced one until it lands.`); } catch (e) {}
+    }
+  }
+  if (st.warned && !st.done && h >= 16.85) {
+    const today = climateDayOfUTC(Date.now());
+    let rev = null;
+    try {
+      const entries = (loadSixHr().entries) || {};
+      Object.keys(entries).forEach(k => {
+        const ms = Date.parse(k);
+        if (!isFinite(ms) || climateDayOfUTC(ms) !== today) return;
+        const lh = parseInt(new Date(ms).toLocaleString("en-US", { timeZone: TZ, hour: "2-digit", hour12: false }), 10);
+        if (lh >= 16 && lh <= 17 && (!rev || entries[k].c > rev.c)) rev = entries[k];
+      });
+    } catch (e) {}
+    if (rev) {
+      st.done = true; st.revC = rev.c; saveR();
+      const surp = +(rev.c - st.visC).toFixed(1);   // round FIRST — 18.9−18.3 is 0.5999… in floats, and the tier must match the displayed number
+      const msg = surp >= 0.6
+        ? `🔓 23Z reveal: ${rev.c.toFixed(1)}°C (${rev.f.toFixed(1)}°F) — +${surp.toFixed(1)}°C ABOVE the tape. The hidden high was real; buckets topping below ${Math.round(rev.f)}° are dying.`
+        : surp >= 0.3
+        ? `🔓 23Z reveal: ${rev.c.toFixed(1)}°C (${rev.f.toFixed(1)}°F) — +${surp.toFixed(1)}°C above the tape, the typical case. Settle expectation nudges up.`
+        : `🔓 23Z reveal: ${rev.c.toFixed(1)}°C — matched the visible tape. No hidden high today (the 31%-of-days case).`;
+      try { if (alertsEnabled()) triggerAlert("23Z Reveal", msg); } catch (e) {}
+    } else if (h > 18.1) {
+      st.done = true; saveR();
+      try { if (alertsEnabled()) triggerAlert("23Z Reveal", "⚠ 23Z 6-hr group not seen by 6 PM — check the sixhr feed before trusting the floor as final."); } catch (e) {}
+    }
+  }
+}
+
+// ---- flip mornings: checked once, banner stands all day ----
+function flipMorningCheck() {
+  const pac = pacificNowParts();
+  let st = {}; try { st = JSON.parse(localStorage.getItem(FLIP_KEY) || "{}"); } catch (e) {}
+  if (st.day !== pac.date) st = { day: pac.date };
+  if (st.checked) return;
+  const h = insightPacHour();
+  if (h < 9.4 || h > 11.6) return;
+  const cloud = (typeof state === "object" && state && state.current) ? state.current.cloud : null;
+  if (cloud == null) return;
+  const yd = new Date(Date.now() - 86400e3).toLocaleDateString("en-CA", { timeZone: TZ });
+  let yMax = null;
+  try { const o = (loadCLI().officials || {})[yd]; if (o && typeof o.max === "number") yMax = o.max; } catch (e) {}
+  const yNorm = normalMaxF(yd);
+  if (yMax == null || yNorm == null) { if (h > 11.5) { st.checked = true; st.flip = null; try { localStorage.setItem(FLIP_KEY, JSON.stringify(st)); } catch (e) {} } return; }
+  const anomY = yMax - yNorm;
+  const flipUp = cloud <= 30 && anomY <= -3;
+  const flipDown = cloud >= 80 && anomY >= 3;
+  st.checked = true; st.anomY = +anomY.toFixed(1); st.cloud = Math.round(cloud);
+  st.flip = flipUp ? "up" : flipDown ? "down" : null;
+  st.yMax = yMax; st.yNorm = +yNorm.toFixed(1);
+  try { localStorage.setItem(FLIP_KEY, JSON.stringify(st)); } catch (e) {}
+  if (st.flip) {
+    const up = st.flip === "up";
+    try { if (alertsEnabled()) triggerAlert("Flip Morning", `⚑ ${up ? "Clear after a cool day" : "Overcast after a hot day"} (yesterday ${yMax}° vs normal ${yNorm.toFixed(0)}° → ${anomY >= 0 ? "+" : ""}${anomY.toFixed(0)}°). ≥5°F jump probability 74% vs 42% base (n=156, split-stable). Direction ${up ? "UP" : "DOWN"} — persistence anchor suspended, the ${up ? "upper" : "lower"} tail is live.`); } catch (e) {}
+  }
+  try { renderFlipStrip(); } catch (e) {}
+}
+
+function renderFlipStrip() {
+  let el = document.getElementById("flip-strip");
+  if (!el) {
+    const host = document.getElementById("proj-stats");
+    if (!host || !host.parentElement) return;
+    el = document.createElement("div"); el.id = "flip-strip";
+    host.parentElement.insertBefore(el, host.nextSibling);
+  }
+  let st = {}; try { st = JSON.parse(localStorage.getItem(FLIP_KEY) || "{}"); } catch (e) {}
+  if (st.day !== pacificNowParts().date || !st.flip) { el.innerHTML = ""; return; }
+  const up = st.flip === "up";
+  el.innerHTML = `<div style="margin-top:8px;padding:7px 10px;background:rgba(${up ? "251,191,36" : "96,165,250"},0.10);border:1px solid ${up ? "#fbbf24" : "#60a5fa"};border-radius:6px;font-size:11px;line-height:1.6;color:${up ? "#fde68a" : "#bfdbfe"}">⚑ <b>FLIP MORNING — direction ${up ? "UP" : "DOWN"}</b> (${up ? "clear after a cool day" : "overcast after a hot day"}; yesterday ${st.yMax}° vs normal ${st.yNorm}°). ≥5°F jump probability <b>74% vs 42% base</b> (n=156, split-stable). Persistence anchor suspended — the ${up ? "upper" : "lower"} tail is the live side today.</div>`;
+}
+
 // Smallest tenth °C whose °F conversion (computed EXACTLY like the rest of the
 // app: toFixed(1) then Math.round) settles floor+1. Searched, not divided, so
 // float noise can't shift the seam.
@@ -3313,9 +3430,9 @@ function renderFloor() {
   // --- phase of day: how much trust the floor deserves as a settle proxy ---
   const pdtH = pacificNowParts().hour;
   let phase, phaseColor;
-  if (pdtH < 10)      { phase = "pre-peak — floor WILL climb, treat strictly as a minimum"; phaseColor = "#94a2b4"; }
-  else if (pdtH < 17) { phase = "peak window — ratchet is live, watch each :53 print";      phaseColor = "#fbbf24"; }
-  else                { phase = "post-peak — floor ≈ settle unless a late push prints";     phaseColor = "#34d399"; }
+  if (pdtH < 10)      { phase = "pre-peak — floor WILL climb, treat strictly as a minimum";                 phaseColor = "#94a2b4"; }
+  else if (pdtH < 18) { phase = "peak window to 6:15 — 70% of maxes print after 4 PM (n=20), ratchet live"; phaseColor = "#fbbf24"; }
+  else                { phase = "past 6:15 — max is in barring exceptional (latest observed ~6:05, n=20)";  phaseColor = "#34d399"; }
 
   // --- seam math ---
   const tn = sf.tenths;
@@ -3600,7 +3717,7 @@ function renderKalshi() {
   const tn = (() => { try { return floorTenthsMax(); } catch (e) { return null; } })();
   const pace = currentClimbPace();
   const pacHr = insightPacHour();
-  const hoursLeft = Math.max(0.5, 17.5 - pacHr);   // effective heating horizon 5:30 PM
+  const hoursLeft = Math.max(0.5, 18.25 - pacHr);  // heating horizon 6:15 PM (n=20 log audit)
 
   // best net-EV candidate across all buckets/sides
   const calc = [];
@@ -3680,7 +3797,7 @@ function renderKalshi() {
       if (g.n && g.bias != null && g.mae != null) foot += `<br>residual (mixed provenance — includes pre-calib raw locks): bias ${g.bias >= 0 ? "+" : ""}${g.bias.toFixed(1)}° · MAE ${g.mae.toFixed(1)}° · n=${g.n}`;
     }
   } catch (e) {}
-  foot += `<br>net EV includes ~7·p·(1−p)¢ taker fee · eff. heating horizon 5:30 PM (late prints to 6:30 happen — n=2) · <a href="#" onclick="fetchKalshi(true);return false" style="color:#60a5fa">↻ refresh</a>`;
+  foot += `<br>net EV includes ~7·p·(1−p)¢ taker fee · heating horizon 6:15 PM — 70% of maxes print after 4 PM, 30% after 5 (n=20) · <a href="#" onclick="fetchKalshi(true);return false" style="color:#60a5fa">↻ refresh</a>`;
   html += `<div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.6">${foot}</div>`;
   body.innerHTML = html;
 }
@@ -5645,7 +5762,7 @@ function renderPace() {
   let pkHr = -1, pkT = -999;
   (day.hourly || []).forEach(h => { if (h.temp > pkT) { pkT = h.temp; pkHr = h.hour; } });
   if (pkHr < 0) pkHr = 16;
-  const effPk = Math.max(pkHr, 17.5);   // forecast peak, floored at the 5:30 PM effective horizon (rules \u00a73)
+  const effPk = Math.max(pkHr, 18.25);  // forecast peak, floored at the 6:15 PM horizon — 70% of daily maxes print after 4 PM, 30% after 5, latest ~6:05 (n=20, rules \u00a73)
   const hrsLeft = Math.max(0, effPk - pacificHour);
   const fmtT = d => d ? new Date(d).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }) : "";
   const needRate = hrsLeft > 0.2 ? (needT - currentF) / hrsLeft : null;
