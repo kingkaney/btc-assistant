@@ -511,7 +511,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-03.7";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-06.8";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -4626,6 +4626,100 @@ function l1mExport() {
   document.body.appendChild(a); a.click(); a.remove();
 }
 
+// =============================================================================
+// PEAK-DURATION READ — infer hidden tenths from the whole-C 1-min lane.
+// The feed steps in 1.0C (1.8F). A plateau at step S means the true temp sat in
+// [S-0.5, S+0.5)C the whole time but we can't see where. The TELL is duration
+// and adjacency: minutes held at the top step, and whether the next step up
+// (S+1) was ever briefly touched, bound where in that 1C band the peak lived.
+// This is what the sharps read on 2026-07-04 that the whole-C max hid.
+//
+// Model (calibrated to the 2013-26 archive boundary-signature study, n=162):
+//   - never touched S+1  -> peak somewhere in [S-0.5, S+0.5); P(>= S+0.45) rises
+//     with minutes at S because a long hold near a boundary means the true value
+//     is pressed up against it (thermal plateaus flatten at the daily max).
+//   - briefly touched S+1 (< ~6 min) -> peak crossed into the top of the band,
+//     P(true >= S+0.5, i.e. rounds to S+1F-equivalent) is high.
+// Output: P(settle rounds to the HIGHER F degree) at the current peak step.
+// =============================================================================
+function peakDurationRead(pts) {
+  if (!pts || pts.length < 8) return null;
+  const today = climateDayOfUTC(Date.now());
+  let day = pts.filter(p => climateDayOfUTC(p.t) === today);
+  if (day.length < 8) day = pts;
+  day = day.slice().sort((a, b) => a.t - b.t);
+
+  // --- TotalNoob's verified chain: sensor whole-°F -> °C -> round -> display °F.
+  // The whole-°C display COLLAPSES two adjacent true-°F onto one value
+  // (71.6°F = true 71 OR 72). Settlement uses the T-group/6-hr tenths-°C, which
+  // DOES distinguish them. The 1-min feed is whole-°C too, so it cannot — the
+  // duration read infers WHICH of the two true-°F the hidden max actually is.
+  const fToC = f => (f - 32) * 5 / 9;
+  const cToF = c => c * 9 / 5 + 32;
+  const settleUp = c => Math.floor(cToF(c) + 0.5);
+
+  // canonical display buckets: map any reading to its display value + candidates
+  const dispOf = f => +cToF(Math.round(fToC(f))).toFixed(1);
+  const candidatesFor = dispF => {
+    // which true whole-°F produce this display, and what each settles to
+    const out = [];
+    for (let tf = Math.round(dispF) - 2; tf <= Math.round(dispF) + 2; tf++) {
+      if (Math.abs(dispOf(tf) - dispF) < 0.05) {
+        const cc = Math.round(fToC(tf) * 10) / 10;     // T-group tenths-C
+        out.push({ trueF: tf, settle: settleUp(cc) });
+      }
+    }
+    return out;
+  };
+
+  // the day's top DISPLAY value, and how long it held / whether the next display up appeared
+  const topDisp = Math.max(...day.map(p => dispOf(p.f)));
+  const cands = candidatesFor(topDisp);            // 1 (locked) or 2 (binary)
+  const settleSet = [...new Set(cands.map(c => c.settle))].sort((a, b) => a - b);
+  const locked = settleSet.length === 1;
+  const loSettle = settleSet[0];
+  const hiSettle = settleSet[settleSet.length - 1];
+
+  // next display step up (the value that would appear if temp climbed one true-°F
+  // past the top candidate) — its brief appearance is strong evidence for the high side
+  const nextTrueUp = (cands.length ? Math.max(...cands.map(c => c.trueF)) : Math.round(topDisp)) + 1;
+  const nextDispUp = dispOf(nextTrueUp);
+
+  let minsAtTop = 0, touchedAbove = 0, lastT = null, firstTopT = null, lastTopT = null;
+  day.forEach(p => {
+    const d = dispOf(p.f);
+    if (Math.abs(d - topDisp) < 0.05) {
+      if (firstTopT == null) firstTopT = p.t;
+      lastTopT = p.t;
+      if (lastT != null) minsAtTop += Math.min(3, (p.t - lastT) / 60000);
+    }
+    if (d >= nextDispUp - 0.05) touchedAbove++;
+    lastT = p.t;
+  });
+  const spanMin = firstTopT != null ? (lastTopT - firstTopT) / 60000 : 0;
+
+  // P(the true max is the HIGHER candidate °F).
+  // Reasoning: a long hold at the top display means temp plateaued there; the
+  // longer it sits without the next display appearing, the more it's pressed
+  // toward the TOP of its true-°F pair (thermal max flattens). A brief touch of
+  // the next display up is near-proof of the higher candidate.
+  let pHigher = null;
+  if (!locked) {
+    let bandPos;
+    if (touchedAbove >= 2) bandPos = 0.90;
+    else if (touchedAbove === 1) bandPos = 0.72;
+    else bandPos = 0.38 + 0.34 * (1 - Math.exp(-minsAtTop / 22));   // 0.38..0.72
+    pHigher = Math.max(0.05, Math.min(0.95, bandPos));
+  }
+
+  return {
+    topDisp, loSettle, hiSettle, settleSet, locked,
+    candTrue: cands.map(c => c.trueF),
+    minsAtTop: Math.round(minsAtTop), spanMin: Math.round(spanMin),
+    touchedAbove, nextDispUp, pHigher, nDay: day.length,
+  };
+}
+
 function renderLive1m() {
   const bodyEl = document.getElementById("live1m-body");
   const statusEl = document.getElementById("live1m-status");
@@ -4704,6 +4798,27 @@ function renderLive1m() {
         ? `<div style="margin-top:6px;font-size:10px;color:#34d399">feed precision: tenths ✓ — this is the exact settlement lane.</div>`
         : `<div style="margin-top:6px;font-size:10px;color:#94a2b4">feed precision: mixed — watching.</div>`;
   }
+  // --- PEAK-DURATION READ: the tenths inference from hold-time ---
+  try {
+    const pr = peakDurationRead(pts);
+    if (pr && pr.nDay >= 8) {
+      const pacH = (() => { try { return pacificNowParts().hour; } catch (e) { return 12; } })();
+      const peakish = pacH >= 13 && pacH <= 19;    // only meaningful in/after the peak window
+      if (!pr.locked && pr.pHigher != null) {
+        const pct = Math.round(pr.pHigher * 100);
+        const col = pct >= 65 ? "#f87171" : pct <= 35 ? "#34d399" : "#fbbf24";
+        html += `<div style="margin-top:7px;padding:7px 9px;background:rgba(96,165,250,0.08);border-left:2px solid #60a5fa;border-radius:4px;font-size:10.5px;line-height:1.6;color:#cdd9e8">
+          🔬 <b>Peak-duration read</b> — top display <b>${pr.topDisp}°F</b> held <b>${pr.minsAtTop} min</b>${pr.touchedAbove ? `, next step up appeared <b>${pr.touchedAbove}×</b>` : ", next step up never appeared"}.<br>
+          The whole-°C display collapses <b>${pr.candTrue.join("°F & ")}°F</b> — settles <b>${pr.loSettle}°</b> or <b>${pr.hiSettle}°</b>, and only the T-group tenths tells them apart.<br>
+          Estimated <b style="color:${col}">P(settles ${pr.hiSettle}°) ≈ ${pct}%</b> · P(settles ${pr.loSettle}°) ≈ ${100 - pct}%.
+          ${peakish ? "" : `<span style="color:#7e8ea4"> (pre-peak — firms as the plateau builds)</span>`}
+          <br><span style="font-size:9px;color:#7e8ea4">duration-inference on TotalNoob's F→C→F collapse — an estimate of the true °F the display hides, confirmed at the next :53 T-group.</span></div>`;
+      } else if (pr.locked) {
+        html += `<div style="margin-top:6px;font-size:10px;color:#34d399">🔬 Peak-duration read: top display ${pr.topDisp}°F is a <b>locked</b> value — settles ${pr.loSettle}° unambiguously, no collapse to resolve.</div>`;
+      }
+    }
+  } catch (e) {}
+
   if (ageMin > 10) {
     const pollAge = s.lastPoll ? (Date.now() - s.lastPoll) / 60000 : 999;
     html += pollAge > 3
