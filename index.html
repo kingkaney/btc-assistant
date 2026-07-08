@@ -194,17 +194,9 @@
   <div class="panel-body" id="drift-body"></div>
 </div>
 
-<!-- SETTLEMENT FLOOR: one-way ratchet from settlement-grade lanes only -->
-<div class="panel" id="floor-panel">
-  <div class="panel-head"><span>⛓ Settlement Floor</span><span class="accent" id="floor-status">—</span></div>
-  <div class="panel-body" id="floor-body"><div style="font-size:11px;color:#94a2b4">waiting for the first settlement-grade ob of the climate day…</div></div>
-</div>
 
-<!-- KALSHI BOARD: live buckets from kalshi.json (Actions) + model EV + auto forks -->
-<div class="panel" id="kalshi-panel">
-  <div class="panel-head"><span>🎯 Kalshi Board · Model EV</span><span class="accent" id="kalshi-status">—</span></div>
-  <div class="panel-body" id="kalshi-body"><div style="font-size:11px;color:#94a2b4">waiting for kalshi.json…</div></div>
-</div>
+
+
 
 <!-- PACE: today's climb, observed vs required rate, over/under verdict -->
 <div class="panel" id="pace-panel">
@@ -218,17 +210,9 @@
   <div class="panel-body" id="nowcast-body"></div>
 </div>
 
-<!-- OFFICIAL SETTLE + SCORECARD (NWS CLI auto-pull) -->
-<div class="panel" id="score-panel">
-  <div class="panel-head"><span>🏛 Official Settle · Scorecard</span><span class="accent" id="score-status">—</span></div>
-  <div class="panel-body" id="score-body"><div style="font-size:11px;color:#94a2b4">fetching official climate reports…</div></div>
-</div>
 
-<!-- TRADE LOG: entries with model EV stamped at entry; auto-settles off final CLI -->
-<div class="panel" id="trades-panel">
-  <div class="panel-head"><span>🧾 Trades</span><span class="accent" id="trades-status">—</span></div>
-  <div class="panel-body" id="trades-body"></div>
-</div>
+
+
 
 <!-- LIVE 1-MIN FEED (MADIS-ready; sleeps until a relay URL is configured) -->
 <div class="panel" id="live1m-panel">
@@ -424,79 +408,23 @@
   </div>
 </div>
 
-<!-- KALSHI EDGE + KELLY SIZING (manual price entry — Kalshi API blocks browsers) -->
-<div class="panel" id="edge-panel">
-  <div class="panel-head"><span>💰 Edge &amp; Size</span><span class="accent" id="edge-status">—</span></div>
-  <div class="panel-body" id="edge-body"></div>
-</div>
 
-<!-- 1-MINUTE BLIP RISK (NCEI one-minute archive via IEM) -->
-<!-- BACKUP: export/import all ksea_* app state (cal log lives in localStorage — one data-clear from gone) -->
+
+<!-- BACKUP + FEEDS consolidated: export/import app state, plus the lane self-test -->
 <div class="panel" id="backup-panel">
-  <div class="panel-head"><span>💾 Backup</span><span class="accent" id="backup-status">—</span></div>
-  <div class="panel-body" id="backup-body"></div>
-</div>
-
-<!-- FEEDS: on-demand lane test. Three "app broken" nights, three different causes — this answers "which lane, what error" in one tap. -->
-<div class="panel" id="feeds-panel">
-  <div class="panel-head"><span>🩺 Feeds</span><span class="accent" id="feeds-status">—</span></div>
-  <div class="panel-body" id="feeds-body"></div>
-</div>
-
-<!-- RULES: the playbook. Single source of truth — when a chat call contradicts this, THIS wins. -->
-<div class="panel" id="rules-panel">
-  <div class="panel-head"><span>📖 Rules</span><span class="accent" style="color:#94a2b4">amended 2026-07-03</span></div>
-  <div class="panel-body" style="font-size:10.5px;line-height:1.65;color:#cdd9e8">
-    <div style="font-size:9.5px;color:#7e8ea4;margin-bottom:7px">Every claim carries n = settled days behind it. n&lt;8 = provisional. Chat contradicts this panel → this panel wins until deliberately amended (edit here, commit).</div>
-
-    <details open style="margin-bottom:6px">
-      <summary style="font-weight:700;color:#eef3fa;cursor:pointer">1 · Settlement mechanics — validated</summary>
-      <div style="padding:5px 0 2px 2px">
-      Settles on <b>NWS CLISEA daily max, whole °F</b> — from METAR <b>T-group tenths</b> and 6-hr max groups. The <b>1-min display is NOT settlement-grade</b> (whole-°C, reads high on spikes: Jun 30 display 63 vs T-group 62.1 → settled 62, n=1 trap). Tenths round to whole °F, <b>.5 up</b> — seams sit at x.5°F; the floor panel computes exact flip prints. On bucket edges trust T-group tenths; 17 settle values are impossible, fat values draw two raw degrees. <b>Floor is a one-way ratchet</b>: dead buckets with YES still bid = free fade.
-      </div>
-    </details>
-
-    <details style="margin-bottom:6px">
-      <summary style="font-weight:700;color:#eef3fa;cursor:pointer">2 · Forecast — the machine makes the number</summary>
-      <div style="padding:5px 0 2px 2px">
-      getDayProjection (ensemble → bias calib → climb override) is the forecast; observed-climb anchoring cut MAE 3.38°→1.45°, buckets 0/8→4/8 (n=8). The Kalshi panel rebuckets its samples onto the <b>live board</b>, clamps the left tail at printed tenths, prices net EV after fees. <b>Chat's role is veto only</b> — regime breaks the model can't see; say why, log it. Historic warm bias +3–4°F in marine regimes (n=4, one cold miss Jul 1) now lives <b>inside CALIB — never re-apply by hand</b>. Touch CALIB.biasF only when the settle-graded residual holds one sign for n≥8. <b>Model Council</b> (HRRR/NBM/ECMWF/GFS, added Jul 2 pm): nudges the pre-climb projection toward multi-model agreement (w=0.35, clamp ±2°, <b>provisional n=0</b>) and widens the band on disagreement. The tradeable signal is <b>HRRR−NBM ≥ 2°</b> — short-range physics vs the blend the market anchors on. Morning snapshots are frozen at 11 AM and graded per-model at settle; weights get earned or fired at n≥8, never tuned by feel. Reforecast datasets / reanalysis / model-versioning infra: wrong tool for a phone app — the live council log IS our reforecast, built one settle at a time. <b>THE 4:53 REVEAL (n=1158, split 30/28)</b>: the 23Z 6-hr group beats the visible hourly tape ≥0.6°C on 29% of days, median +0.5°C — before 4:53 the bucket above the visible max is structurally underpriced by hourly-watchers; after, the information is spent. <b>FLIP MORNINGS (n=156, split 75/74)</b>: OVC@10 after a hot day or clear@10 after a cool day → ≥5°F jump probability 74% vs 42% base, direction given by the flip. Persistence is otherwise real (anomaly r=0.63) — trust the anchor EXCEPT on flip mornings.
-      </div>
-    </details>
-
-    <details style="margin-bottom:6px">
-      <summary style="font-weight:700;color:#eef3fa;cursor:pointer">3 · Intraday reads</summary>
-      <div style="padding:5px 0 2px 2px">
-      Arbiter = <b>T-group climb rate</b>, never sky photos (they whipsaw). Layered break (BKN under OVC) ≠ break; single-layer OVC→BKN→SCT is genuine. <b>THE CLOCK RULE (n=20, Jun 10–Jul 2 log audit): nothing top-side is dead before 6:15 PM PDT.</b> Daily max printed after 4 PM on 70% of days, after 5 PM on 30%, latest ~6:05. Fork/pace horizons use 6:15. <b>Deck diagnostic REFUTED (Jul 3 audit):</b> "flat climb + intact OVC after max insolation caps the ceiling" went 0-for-2 in its own dataset (Jun 26 rose +2.6° after, Jul 2 rose +5.4° after). Do not use it. The clock decides when you're safe, not the sky. <b>Late escapes past 6:15 are a MARINE-day phenomenon</b>: cool-anomaly days 3.0% vs hot days 0.5% (n=1190) — the gray days are the dangerous ones, not the scorchers.
-      </div>
-    </details>
-
-    <details style="margin-bottom:6px">
-      <summary style="font-weight:700;color:#eef3fa;cursor:pointer">4 · Market rules</summary>
-      <div style="padding:5px 0 2px 2px">
-      <b>Never price a leg without the live board</b> — buckets come from the board, period; Kalshi runs even-low pairs + threshold ends, the app's odd-low bins are legacy (n=1 process error, Jul 2). <b>Size 10–20%/day hard cap; correlated legs = ONE bet</b> (validated Jul 1: 2° miss cost ~$12). Displayed YES summing &gt;~103 = you're reading asks → work a passive bid. <b>Trade only net EV ≥ +8¢</b> after the 7·p·(1−p)¢ fee (provisional; revisit at trade-log n=20). EV is stamped at entry and graded vs realized at settle — forecast calibration ≠ edge calibration. <b>Exits are written at entry</b> from the fork prints; cut on regime-flip evidence, not certainty — 15–20¢ eaten beats a ride to zero. PINNED + flat climb after 2 PM = probably paid: hold <i>with the ratchet alert armed</i>.
-      </div>
-    </details>
-
-    <details style="margin-bottom:6px">
-      <summary style="font-weight:700;color:#eef3fa;cursor:pointer">5 · Ops</summary>
-      <div style="padding:5px 0 2px 2px">
-      <b>Backup weekly</b> (panel nags at 7d); Synoptic token never in backups or the public repo — re-enter after import. Quote feed: repo kalshi.json (Actions, real cadence 5–15 min) → live proxy fallback; <b>stale banner showing → verify price in the Kalshi app before executing</b>. The floor only sees prints that reach a cache — a between-hours spike with no SPECI hides until the 6-hr group; that gap is the Termux 1-min alerter's job (tripwire, not settlement). Status: pending. <b>Lane-divergence alarm</b>: settlement lanes quiet &gt;75 min while a live lane reads ≥1.5° off the last print → floor UNTRUSTED, pace verdicts refused, DEAD/fork tags suspended, cold-side P flagged as overstated. Display lanes generate <i>doubt</i>, never settlement values. (n=1: Jul 2 — the cache froze at 12:53 and KSEA ran to 68 on the live lanes while every panel swore the max was 64.9.)
-      </div>
-    </details>
-
-    <details>
-      <summary style="font-weight:700;color:#eef3fa;cursor:pointer">6 · Claim hygiene</summary>
-      <div style="padding:5px 0 2px 2px">
-      Every empirical claim gets an n; new patterns enter provisional (n=1) and earn trust proportionally. Jul 2's "suppressed days bounce back warm" lean was n=1 — it pointed right, which was luck wearing a thesis costume. Amend rules here, in the file, with evidence — not in chat, not from memory. <b>Screenshots during market hours are live telemetry — answer the position first, fix the app second</b> (n=1, Jul 2 pm). And <b>rhyme is not data</b>: the honest 68.0° live read was dismissed as an artifact because it resembled Jun 30's display trap — matching a past failure pattern is a hypothesis to test against fresh prints, never a verdict (n=1, Jul 2, cost: a wrong "hold, you're paid" call on a live position).
-      </div>
-    </details>
+  <div class="panel-head"><span>💾 Backup &amp; Feeds</span><span class="accent" id="backup-status">—</span></div>
+  <div class="panel-body">
+    <div id="backup-body"></div>
+    <div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08)">
+      <div style="font-size:10px;letter-spacing:0.6px;color:#7e8ea4;margin-bottom:6px">FEED HEALTH <span class="accent" id="feeds-status" style="color:#94a2b4">—</span></div>
+      <div id="feeds-body"></div>
+    </div>
   </div>
 </div>
 
-<div class="panel" id="blip-panel">
-  <div class="panel-head"><span>🔬 1-Min Blip Risk</span><span class="accent" id="blip-status">—</span></div>
-  <div class="panel-body" id="blip-body"><div style="font-size:11px;color:#94a2b4">fetching one-minute archive…</div></div>
-</div>
+
+
+
 
 <div class="footer">
   <div class="lbl">Method</div>
@@ -4316,11 +4244,36 @@ async function fetchBlip(force) {
   refreshAutoPeeks();
 }
 
-function renderBlip() {
-  const bodyEl = document.getElementById("blip-body");
-  const statusEl = document.getElementById("blip-status");
-  if (!bodyEl) return;
+// Returns the blip summary HTML (moved into Tracking vs Forecast). Recording
+// and fetching continue untouched; only the display location changed.
+function blipSummaryHtml() {
   const cache = loadBlip();
+  const days = Object.keys(cache.days || {})
+    .map(d => Object.assign({ date: d }, cache.days[d]))
+    .filter(r => !r.gap).sort((a, b) => b.date.localeCompare(a.date));
+  if (!days.length) return "";
+  const flips = days.filter(r => Math.round(r.max1) > Math.round(r.max5));
+  const excesses = days.map(r => r.max1 - r.max5);
+  const avgEx = excesses.reduce((a, b) => a + b, 0) / excesses.length;
+  const maxEx = Math.max(...excesses);
+  const withSettle = days.filter(r => r.settle != null);
+  const matches = withSettle.filter(r => r.settle === Math.round(r.max1));
+  const wholeOnly = days.every(r => Number.isInteger(r.max1) && Number.isInteger(r.max5));
+  let h = `<div style="margin-top:10px;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px">
+    <div style="font-size:10px;letter-spacing:0.6px;color:#7e8ea4;margin-bottom:4px">HIDDEN-TENTHS / BLIP RECORD · ${flips.length}/${days.length} blip days</div>
+    <div style="font-size:12px;line-height:1.55;color:#eef3fa">The settle beat the visible 5-min max on <b style="color:#fcd34d">${flips.length} of ${days.length}</b> days (${(flips.length/days.length*100).toFixed(0)}%) · avg invisible excess <b>${avgEx>=0?"+":""}${avgEx.toFixed(1)}°</b> · worst <b>+${maxEx.toFixed(1)}°</b></div>`;
+  if (withSettle.length) {
+    h += `<div style="font-size:10px;color:#94a2b4;margin-top:5px;line-height:1.5">Validation: official settle = rounded 1-min max on ${matches.length}/${withSettle.length} days${matches.length===withSettle.length?" ✓ (settlement model confirmed)":wholeOnly?` — settles 1° under the archive max are normal here: the whole-°F archive hides the tenths (a "63.0" can be a true 62.5–63.4)`:""}</div>`;
+  }
+  h += `</div>`;
+  return h;
+}
+
+function renderBlip() {
+  // panel removed — recording continues via fetchBlip; nothing to render here.
+  return;
+  const cache = loadBlip();
+  const bodyEl = null, statusEl = null;
   const days = Object.keys(cache.days || {})
     .map(d => Object.assign({ date: d }, cache.days[d]))
     .filter(r => !r.gap).sort((a, b) => b.date.localeCompare(a.date));
@@ -5058,7 +5011,7 @@ function renderDrift() {
     if (fcstByHour[hr] != null) deltas.push({ hour: hr, delta: obsByHour[k].tempF - fcstByHour[hr] });
   });
   if (deltas.length < 2) {
-    bodyEl.innerHTML = pathBlock + `<div style="font-size:11px;color:#94a2b4;line-height:1.5;margin-top:8px">Gathering readings — the drift-vs-forecast call needs a couple of hours of live data.</div>`;
+    bodyEl.innerHTML = pathBlock + `<div style="font-size:11px;color:#94a2b4;line-height:1.5;margin-top:8px">Gathering readings — the drift-vs-forecast call needs a couple of hours of live data.</div>` + ((function(){ try { return blipSummaryHtml(); } catch(e){ return ""; } })());
     setStatus("warming up"); return;
   }
 
@@ -5108,6 +5061,7 @@ function renderDrift() {
     </div>
     ${pathBlock}
     <div style="font-size:9px;color:#7e8ea4;margin-top:10px;line-height:1.4">vs locked call ${origBin}° · ${deltas.length}h of obs · assumes the current bias holds — won't see a frontal flip coming.</div>
+    ${(function(){ try { return blipSummaryHtml(); } catch(e){ return ""; } })()}
   `;
 }
 
@@ -5116,7 +5070,6 @@ function renderAll() {
   // missing day object silently killed everything after it in this list.
   const seq = [
     renderStatus, renderDayStrip, renderProjection, renderAICall, renderDrift,
-    renderEdge, renderScorecard, renderFloor, renderKalshi, renderTrades,
     renderBackup, renderBlip, renderLive1m, renderConditions,
     renderNearbyStations, renderSynopticStations, renderStationDots,
     renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderFeeds,
