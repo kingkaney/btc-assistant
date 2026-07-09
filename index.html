@@ -187,11 +187,7 @@
   <div class="panel-head"><span>📊 6-Hour Max</span><span class="accent" id="sixhr-status">—</span></div>
   <div class="panel-body" id="sixhr-body"><div style="font-size:11px;color:#94a2b4">waiting for the synoptic 6-hour max report…</div></div>
 </div>
-<!-- TAF: NWS forecaster's terminal aerodrome forecast — the human high-temp call (TX group) + wind/sky transitions -->
-<div class="panel" id="taf-panel">
-  <div class="panel-head"><span>🛫 TAF Forecast</span><span class="accent" id="taf-status">—</span></div>
-  <div class="panel-body" id="taf-body"><div style="font-size:11px;color:#94a2b4">fetching the terminal aerodrome forecast…</div></div>
-</div>
+
   <div class="panel-body" id="insight-body"><div style="font-size:11px;color:#94a2b4">computing ceiling, divergence, reliability…</div></div>
 </div>
   <div class="panel-body" id="speci-body"><div style="font-size:11px;color:#94a2b4">watching for off-cycle special observations…</div></div>
@@ -444,7 +440,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-08.9";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-06.8";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -2508,159 +2504,6 @@ async function fetchCLI(force) {
 // at synoptic hours. The ~4:53 PM PDT ob covers 11AM–5PM — almost always the
 // daily high — and resolves the whole-°C ambiguity hours before CLISEA.
 // =============================================================================
-
-// =============================================================================
-// TAF — Terminal Aerodrome Forecast. The NWS forecaster's own outlook for KSEA,
-// reissued 4x/day (00/06/12/18Z) + amendments. Two things the GFS ensemble
-// doesn't give: (1) TX/TN groups — a HUMAN's max/min temp call (TX21/1921Z =
-// forecast max 21C on the 19th by 21Z) to check against our model, and (2) timed
-// FM/BECMG wind & sky transitions that often lead the temperature moves.
-// =============================================================================
-const TAF_KEY = "ksea_taf_v1";
-function loadTaf() { try { return JSON.parse(localStorage.getItem(TAF_KEY) || "{}"); } catch (e) { return {}; } }
-function saveTaf(o) { try { localStorage.setItem(TAF_KEY, JSON.stringify(o)); } catch (e) {} }
-
-const TAF_URLS = [
-  "https://aviationweather.gov/api/data/taf?ids=" + STATION + "&format=json",
-  "https://aviationweather.gov/cgi-bin/data/taf.php?ids=" + STATION + "&format=json",
-];
-
-async function fetchTaf(force) {
-  const cache = loadTaf();
-  const now = Date.now();
-  if (!force && cache.lastFetch && now - cache.lastFetch < 9 * 60 * 1000) { renderTaf(); return; }
-  cache.lastFetch = now;
-  let got = null;
-  for (const u of TAF_URLS) {
-    try {
-      const r = await fetch(u, { headers: { "User-Agent": "ksea-app taf", "Accept": "application/json" } });
-      if (!r.ok) continue;
-      const j = await r.json();
-      const row = Array.isArray(j) ? j[0] : (j && j.data ? j.data[0] : null);
-      if (row && (row.rawTAF || row.rawTaf)) { got = row; break; }
-    } catch (e) { cache.error = String((e && e.message) || e); }
-  }
-  if (got) {
-    cache.raw = got.rawTAF || got.rawTaf;
-    cache.issueTime = got.issueTime || got.bulletinTime || null;
-    cache.error = null;
-    if (cache.lastRaw && cache.lastRaw !== cache.raw) {
-      const amd = /\bTAF\s+AMD\b/.test(cache.raw) || /\bTAF\s+COR\b/.test(cache.raw);
-      try {
-        if (typeof alertsEnabled !== "function" || alertsEnabled()) {
-          const tx = parseTafTemps(cache.raw);
-          triggerAlert("TAF " + (amd ? "AMENDED" : "updated"),
-            "New KSEA forecast" + (tx.maxF != null ? " — forecaster high " + tx.maxF + "F (" + tx.maxC + "C)" : "") + ". Check wind/sky transitions.");
-        }
-      } catch (e) {}
-    }
-    cache.lastRaw = cache.raw;
-  } else if (!cache.raw) {
-    cache.error = cache.error || "no TAF returned";
-  }
-  saveTaf(cache);
-  try { renderTaf(); } catch (e) {}
-}
-
-function parseTafTemps(raw) {
-  const out = { maxC: null, maxF: null, maxAt: null, minC: null, minF: null, minAt: null };
-  if (!raw) return out;
-  const tx = raw.match(/\bTX(M?)(\d{2})\/(\d{2})(\d{2})Z\b/);
-  if (tx) {
-    const c = parseInt(tx[2], 10) * (tx[1] === "M" ? -1 : 1);
-    out.maxC = c; out.maxF = Math.round(c * 9 / 5 + 32); out.maxAt = tx[3] + "th " + tx[4] + "Z";
-  }
-  const tn = raw.match(/\bTN(M?)(\d{2})\/(\d{2})(\d{2})Z\b/);
-  if (tn) {
-    const c = parseInt(tn[2], 10) * (tn[1] === "M" ? -1 : 1);
-    out.minC = c; out.minF = Math.round(c * 9 / 5 + 32); out.minAt = tn[3] + "th " + tn[4] + "Z";
-  }
-  return out;
-}
-
-function parseTafPeriods(raw) {
-  if (!raw) return [];
-  let body = raw.replace(/^TAF\s+(AMD\s+|COR\s+)?/, "").trim();
-  body = body.replace(/\s+(FM\d{6}|BECMG\s+\d{4}\/\d{4}|TEMPO\s+\d{4}\/\d{4}|PROB\d{2}\s+\d{4}\/\d{4})/g, "\n$1");
-  const lines = body.split("\n").map(s => s.trim()).filter(Boolean);
-  const decodeWind = seg => {
-    const m = seg.match(/\b(\d{3}|VRB)(\d{2,3})(G(\d{2,3}))?KT\b/);
-    if (!m) return null;
-    const dir = m[1] === "VRB" ? "variable" : m[1] + "\u00b0";
-    return dir + " " + parseInt(m[2], 10) + "kt" + (m[4] ? " gust " + parseInt(m[4], 10) : "");
-  };
-  const decodeSky = seg => {
-    const cover = { SKC: "clear", CLR: "clear", NSC: "clear", FEW: "few", SCT: "scattered", BKN: "broken", OVC: "overcast" };
-    const ms = [...seg.matchAll(/\b(SKC|CLR|NSC|FEW|SCT|BKN|OVC)(\d{3})?\b/g)];
-    if (!ms.length) return null;
-    return ms.map(m => cover[m[1]] + (m[2] ? " @ " + (parseInt(m[2], 10) * 100) + "ft" : "")).join(", ");
-  };
-  const decodeWx = seg => {
-    const wx = { "-RA": "light rain", "RA": "rain", "+RA": "heavy rain", "SHRA": "showers", "-SHRA": "light showers",
-      "TSRA": "thunderstorms", "BR": "mist", "FG": "fog", "HZ": "haze", "DZ": "drizzle", "-DZ": "light drizzle",
-      "VCSH": "showers nearby", "NSW": "no significant weather" };
-    const found = [];
-    Object.keys(wx).forEach(k => { if (new RegExp("\\b" + k.replace(/[+-]/g, "\\$&") + "\\b").test(seg)) found.push(wx[k]); });
-    return found.length ? found.join(", ") : null;
-  };
-  return lines.map(seg => {
-    let label = "from start", isInitial = true;
-    let fm = seg.match(/^FM(\d{2})(\d{2})(\d{2})/);
-    let bc = seg.match(/^(BECMG|TEMPO|PROB\d{2})\s+(\d{2})(\d{2})\/(\d{2})(\d{2})/);
-    if (fm) { label = "from " + fm[2] + ":" + fm[3] + "Z (" + fm[1] + "th)"; isInitial = false; }
-    else if (bc) { label = bc[1] + " " + bc[3] + ":00\u2192" + bc[5] + ":00Z"; isInitial = false; }
-    return { label, isInitial, wind: decodeWind(seg), sky: decodeSky(seg), wx: decodeWx(seg), raw: seg };
-  });
-}
-
-function renderTaf() {
-  const body = document.getElementById("taf-body");
-  const statusEl = document.getElementById("taf-status");
-  if (!body) return;
-  const cache = loadTaf();
-  if (!cache.raw) {
-    body.innerHTML = '<div style="font-size:11px;color:' + (cache.error ? "#f87171" : "#94a2b4") + ';line-height:1.5">' +
-      (cache.error ? "Couldn't reach the TAF feed (" + cache.error + "). " : "No TAF yet. ") +
-      '<a href="#" onclick="fetchTaf(true);return false" style="color:#60a5fa">\u21bb retry</a></div>';
-    if (statusEl) { statusEl.textContent = cache.error ? "error" : "\u2014"; statusEl.style.color = cache.error ? "#f87171" : "#94a2b4"; }
-    return;
-  }
-  const temps = parseTafTemps(cache.raw);
-  const periods = parseTafPeriods(cache.raw);
-  const ageMin = cache.issueTime ? Math.round((Date.now() - Date.parse(cache.issueTime)) / 60000) : null;
-  const amd = /\bTAF\s+AMD\b/.test(cache.raw);
-  if (statusEl) {
-    statusEl.textContent = (amd ? "AMD \u00b7 " : "") + (temps.maxF != null ? "hi " + temps.maxF + "\u00b0" : "issued");
-    statusEl.style.color = amd ? "#fbbf24" : "#34d399";
-  }
-  let cmp = "";
-  try {
-    const proj = getDayProjection(state.selectedDate);
-    if (proj && proj.median != null && temps.maxF != null) {
-      const d = temps.maxF - Math.round(proj.median);
-      cmp = ' <span style="color:#7e8ea4">\u00b7 our model ' + Math.round(proj.median) + "\u00b0 (" + (d === 0 ? "match" : (d > 0 ? "forecaster +" + d : "forecaster " + d) + "\u00b0") + ")</span>";
-    }
-  } catch (e) {}
-  let html = "";
-  if (amd) html += '<div style="margin-bottom:8px;padding:5px 8px;background:rgba(251,191,36,0.10);border-left:2px solid #fbbf24;border-radius:4px;font-size:10px;color:#fde68a">\u26d1 AMENDED — supersedes the scheduled TAF. Something changed since issuance.</div>';
-  if (temps.maxF != null) {
-    html += '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">' +
-      '<div style="font-size:26px;font-weight:800;color:#eef3fa;font-variant-numeric:tabular-nums">' + temps.maxF + '\u00b0F</div>' +
-      '<div style="font-size:10.5px;line-height:1.5;color:#94a2b4">forecaster\'s high (' + temps.maxC + '\u00b0C, by ' + temps.maxAt + ')' + cmp + '<br>' +
-      (temps.minF != null ? "low " + temps.minF + "\u00b0F \u00b7 " : "") + (ageMin != null ? "issued " + (ageMin < 90 ? ageMin + "m ago" : (ageMin / 60).toFixed(1) + "h ago") : "") + '</div></div>';
-  } else {
-    html += '<div style="font-size:11px;color:#cdd9e8">TAF issued' + (ageMin != null ? " " + ageMin + "m ago" : "") + ' — no TX temp group this cycle.</div>';
-  }
-  html += '<div style="margin-top:10px;border-top:1px solid rgba(255,255,255,0.08);padding-top:7px"><div style="font-size:10px;letter-spacing:0.6px;color:#7e8ea4;margin-bottom:5px">FORECAST TRANSITIONS</div>';
-  periods.slice(0, 6).forEach(p => {
-    const bits = [p.wind, p.sky, p.wx].filter(Boolean).join(" \u00b7 ");
-    html += '<div style="font-size:10.5px;line-height:1.5;padding:2.5px 0;color:#cdd9e8"><b style="color:' + (p.isInitial ? "#93c5fd" : "#dbe4f0") + '">' + p.label + ':</b> ' + (bits || "\u2014") + '</div>';
-  });
-  html += '</div>';
-  html += '<div style="margin-top:8px;font-size:9px;color:#56657a;line-height:1.5;word-break:break-word">' + cache.raw + '</div>';
-  html += '<div style="margin-top:4px;font-size:9px;color:#56657a">human forecaster product \u00b7 reissued 00/06/12/18Z + amendments \u00b7 <a href="#" onclick="fetchTaf(true);return false" style="color:#60a5fa">\u21bb refresh</a></div>';
-  body.innerHTML = html;
-}
 
 const SIXHR_KEY = "ksea_sixhr_v1";
 function loadSixHr() { try { return JSON.parse(localStorage.getItem(SIXHR_KEY) || "{}"); } catch (e) { return {}; } }
@@ -5231,7 +5074,7 @@ function renderAll() {
     renderStatus, renderDayStrip, renderProjection, renderAICall, renderDrift,
     renderBackup, renderBlip, renderLive1m, renderConditions,
     renderNearbyStations, renderSynopticStations, renderStationDots,
-    renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderTaf, renderFeeds,
+    renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderFeeds,
     renderSkycams, renderBuckets, renderChart, renderCurrent,
     renderAlertsSummary, renderCalLogStatus, renderCalibPanel, renderAccLogStatus,
   ];
@@ -6795,8 +6638,6 @@ fetchKalshi();                             // Kalshi board: on load…
 setInterval(() => fetchKalshi(), 300_000); // …then every 5 min (matches the Actions cadence)
 fetchSixHour();                            // METAR 6-hr precise group: on load…
 setInterval(() => fetchSixHour(), 1_200_000); // …baseline every 20 min
-fetchTaf();                                // TAF forecaster outlook: on load…
-setInterval(() => fetchTaf(), 600_000);    // …every 10 min (matches upstream TAF refresh)
 setInterval(() => {                           // burst window: METARs publish ~:53-:00, grab tenths within minutes
   const m = new Date().getUTCMinutes();
   if ((m >= 54 || m <= 8) && m % 3 === 0) fetchSixHour(true);
