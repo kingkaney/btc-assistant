@@ -444,7 +444,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-09.9";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-09.11";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -2880,13 +2880,17 @@ function renderSpeci() {
 // OVC = any BKN/OVC layer, CLR = everything else. Recompute if re-derived.
 // =============================================================================
 const CHECKPOINT_TABLES = {
+  // med/p25/p75 = climb quartiles for the POINT CALL (high = T + med).
+  // Out-of-sample accuracy of that call, 26 years: noon MAE 2.4°F (±2° on 55%
+  // of days, zero bias), 10AM MAE 3.0°F. Beats yesterday-anchor (5.0°); the
+  // app's blended model runs ~1.8° — this is the independent second opinion.
   t10: {
-    CLR: { n: 353, grid: [[8,91],[10,78],[12,59],[14,40],[16,22],[18,12],[20,3]], noisy: [], floor5: 7.0 },
-    OVC: { n: 423, grid: [[8,76],[10,60],[12,39],[14,24],[16,13],[18,4],[20,1]], noisy: [12,14], floor5: 4.3 },
+    CLR: { n: 353, med: 12.6, p25: 10.4, p75: 14.9, grid: [[8,91],[10,78],[12,59],[14,40],[16,22],[18,12],[20,3]], noisy: [], floor5: 7.0 },
+    OVC: { n: 423, med: 10.8, p25: 8.1,  p75: 13.1, grid: [[8,76],[10,60],[12,39],[14,24],[16,13],[18,4],[20,1]], noisy: [12,14], floor5: 4.3 },
   },
   t12: {
-    CLR: { n: 405, grid: [[4,89],[6,70],[8,46],[10,24],[12,10]], noisy: [], floor5: 3.6 },
-    OVC: { n: 370, grid: [[4,77],[6,54],[8,27],[10,14],[12,5]], noisy: [], floor5: 1.8 },
+    CLR: { n: 405, med: 7.4, p25: 5.4, p75: 9.7, grid: [[4,89],[6,70],[8,46],[10,24],[12,10]], noisy: [], floor5: 3.6 },
+    OVC: { n: 370, med: 6.7, p25: 4.9, p75: 8.1, grid: [[4,77],[6,54],[8,27],[10,14],[12,5]], noisy: [], floor5: 1.8 },
   },
 };
 
@@ -2929,51 +2933,203 @@ function checkpointProb(grid, x) {
   return { p: last[1], clamped: null };
 }
 
+// --- CHECKPOINT SELF-GRADE: freeze each day's 10AM/noon read, score it against
+// the official settle next morning, and show calibration so the table earns
+// trust with an n instead of a story. Chips derive deterministically from the
+// frozen (tF, sky), so display and grading can never disagree.
+const CKPT_GRADE_KEY = "ksea_ckpt_grades_v1";
+function loadCkptGrades() { try { return JSON.parse(localStorage.getItem(CKPT_GRADE_KEY) || "{}"); } catch (e) { return {}; } }
+function saveCkptGrades(o) { try { localStorage.setItem(CKPT_GRADE_KEY, JSON.stringify(o)); } catch (e) {} }
+
+function ckptChips(key, tF, sky) {
+  const T = CHECKPOINT_TABLES[key][sky];
+  const out = [];
+  const startK = Math.ceil(tF + T.grid[0][0]);
+  const endK = Math.floor(tF + T.grid[T.grid.length - 1][0]);
+  for (let K = startK; K <= endK; K++) {
+    const x = K - tF;
+    const { p } = checkpointProb(T.grid, x);
+    out.push({ K, p, noisy: T.noisy.some(nx => Math.abs(x - nx) <= 1) });
+  }
+  return out;
+}
+
+function officialSettleFor(date) {
+  try {
+    const prods = (loadCLI().products) || {};
+    let best = null;
+    Object.values(prods).forEach(p => {
+      if (!p || p.skip || p.date !== date || p.max == null) return;
+      if (!best || (p.final && !best.final)) best = p;
+    });
+    return best ? best.max : null;
+  } catch (e) { return null; }
+}
+
+function tgroupDayMaxFor(date) {
+  const tg = loadSixHr().tgroups || {};
+  let maxF = null, latestMin = -1, n = 0;
+  Object.keys(tg).forEach(iso => {
+    const ms = Date.parse(iso);
+    if (!isFinite(ms) || ptDateOf(ms) !== date) return;
+    n++;
+    const f = tg[iso].f;
+    if (maxF == null || f > maxF) maxF = f;
+    const mm = ptMinutesOf(ms);
+    if (mm > latestMin) latestMin = mm;
+  });
+  return { maxF, latestMin, n };
+}
+
+function gradeCheckpointSnaps() {
+  const g = loadCkptGrades(); g.snaps = g.snaps || {};
+  const today = ptDateOf(Date.now());
+  let changed = false;
+  Object.values(g.snaps).forEach(s => {
+    if (s.graded || s.skipped || s.date >= today) return;
+    let settle = officialSettleFor(s.date), src = "CLI";
+    if (settle == null) {
+      const fb = tgroupDayMaxFor(s.date);
+      // trust the T-group day max only if obs run past 18:30 PT (6:15 clock rule)
+      if (fb.maxF != null && fb.latestMin >= 1110) { settle = Math.round(fb.maxF); src = "T-group"; }
+    }
+    if (settle == null) {
+      const ageDays = (Date.parse(today) - Date.parse(s.date)) / 86400000;
+      if (ageDays > 15) { s.skipped = true; s.reason = "no settle data"; changed = true; }
+      return;
+    }
+    s.graded = true; s.settle = settle; s.src = src; changed = true;
+  });
+  if (changed) saveCkptGrades(g);
+  return g;
+}
+
+function ckptGradeSummaryHtml(g) {
+  const snaps = Object.values((g && g.snaps) || {}).filter(s => s.graded);
+  if (!snaps.length) {
+    return `<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px;font-size:10px;color:#7e8ea4">SELF-GRADE · n=0 — every chip shown today gets scored against the official settle tomorrow morning. The table earns trust with an n, not a story.</div>`;
+  }
+  const buckets = [[0,20],[20,35],[35,50],[50,65],[65,80],[80,101]];
+  const agg = buckets.map(b => ({ lo: b[0], hi: b[1], n: 0, hit: 0, psum: 0 }));
+  let floorHeld = 0, floorN = 0;
+  snaps.forEach(s => {
+    const chips = ckptChips(s.key, s.tF, s.sky);
+    chips.forEach(c => {
+      if (c.noisy) return;
+      const b = agg.find(a => c.p >= a.lo && c.p < a.hi);
+      if (!b) return;
+      b.n++; b.psum += c.p;
+      if (s.settle >= c.K) b.hit++;
+    });
+    const T = CHECKPOINT_TABLES[s.key][s.sky];
+    floorN++;
+    if (s.settle >= Math.round(s.tF + T.floor5)) floorHeld++;
+  });
+  // point-call accuracy on graded days
+  let ptErrs = [];
+  snaps.forEach(s => {
+    const T = CHECKPOINT_TABLES[s.key][s.sky];
+    ptErrs.push(s.settle - Math.round(s.tF + T.med));
+  });
+  const ptMae = ptErrs.reduce((a, e) => a + Math.abs(e), 0) / ptErrs.length;
+  const ptW1 = 100 * ptErrs.filter(e => Math.abs(e) <= 1).length / ptErrs.length;
+  const dayCount = new Set(snaps.map(s => s.date)).size;
+  let h = `<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px">
+    <div style="font-size:10px;letter-spacing:0.6px;color:#7e8ea4;margin-bottom:3px">SELF-GRADE · ${snaps.length} checkpoint${snaps.length===1?"":"s"} over ${dayCount} day${dayCount===1?"":"s"}</div>`;
+  agg.filter(a => a.n > 0).forEach(a => {
+    const act = 100 * a.hit / a.n, pred = a.psum / a.n;
+    const off = act - pred;
+    const col = Math.abs(off) <= 10 ? "#34d399" : Math.abs(off) <= 20 ? "#fbbf24" : "#f87171";
+    h += `<div style="font-size:10.5px;color:#cdd9e8;padding:1px 0">said ~${Math.round(pred)}% → hit <b style="color:${col}">${Math.round(act)}%</b> <span style="color:#7e8ea4">(n=${a.n} chips)</span></div>`;
+  });
+  h += `<div style="font-size:9.5px;color:#7e8ea4;margin-top:3px">point call: MAE ${ptMae.toFixed(1)}° · within ±1°: ${Math.round(ptW1)}% (26-yr expectation: 2.4° / ~24%) · 95% floor held ${floorHeld}/${floorN}</div>`;
+  const recent = snaps.sort((a,b) => b.date.localeCompare(a.date)).slice(0,3);
+  recent.forEach(s => {
+    const chips = ckptChips(s.key, s.tF, s.sky).filter(c => !c.noisy);
+    const right = chips.filter(c => (s.settle >= c.K) === (c.p >= 50)).length;
+    const T2 = CHECKPOINT_TABLES[s.key][s.sky];
+    const pred = Math.round(s.tF + T2.med);
+    h += `<div style="font-size:9px;color:#56657a">${s.date.slice(5)} ${s.key === "t10" ? "10am" : "noon"} ${s.tF.toFixed(0)}° ${s.sky.toLowerCase()} → called ${pred}°, set ${s.settle}° (${s.settle === pred ? "exact" : (s.settle > pred ? "+" : "") + (s.settle - pred) + "°"}, ${s.src})</div>`;
+  });
+  h += `</div>`;
+  return h;
+}
+
 function renderCheckpoint() {
   const body = document.getElementById("checkpoint-body");
   const statusEl = document.getElementById("checkpoint-status");
   if (!body) return;
+  const grades = gradeCheckpointSnaps();
+  grades.snaps = grades.snaps || {};
   const nowMin = ptMinutesOf(Date.now());
+  const today = ptDateOf(Date.now());
   const points = [
     { key: "t10", label: "10 AM", target: 600 },
     { key: "t12", label: "NOON", target: 720 },
   ];
-  let html = "", chip = "pre-10AM";
+  let html = "", chip = "pre-10AM", froze = false;
   points.forEach(pt => {
     if (nowMin < pt.target) {
       html += `<div style="font-size:11px;color:#94a2b4;padding:4px 0">${pt.label} checkpoint — waiting (arms at ${pt.label === "10 AM" ? "10:00" : "12:00"} PT off the :53 ob).</div>`;
       return;
     }
-    const ob = checkpointRead(pt.target);
-    if (!ob) {
-      html += `<div style="font-size:11px;color:#94a2b4;padding:4px 0">${pt.label} checkpoint — no ob within ±40 min yet (feed gap).</div>`;
-      return;
-    }
-    const skyKnown = ob.sky === "CLR" || ob.sky === "OVC";
-    const skies = skyKnown ? [ob.sky] : ["CLR", "OVC"];
-    skies.forEach(sky => {
-      const T = CHECKPOINT_TABLES[pt.key][sky];
-      chip = `${pt.label.toLowerCase()} ${ob.tF.toFixed(0)}° ${sky.toLowerCase()}`;
-      html += `<div style="margin:6px 0 2px;font-size:11px;color:#eef3fa"><b>${pt.label}</b>: ${ob.tF.toFixed(1)}°F, ${sky === "CLR" ? "clear" : "overcast"}${skyKnown ? "" : " (sky unknown — showing " + sky + ")"} <span style="color:#7e8ea4">· n=${T.n} July days</span></div>`;
-      html += `<div style="display:flex;flex-wrap:wrap;gap:5px;margin:4px 0 8px">`;
-      // whole-degree thresholds from ceil(T + first grid X) upward
-      const startK = Math.ceil(ob.tF + T.grid[0][0]);
-      const endK = Math.floor(ob.tF + T.grid[T.grid.length - 1][0]);
-      for (let K = startK; K <= endK; K++) {
-        const x = K - ob.tF;
-        const { p } = checkpointProb(T.grid, x);
-        const isNoisy = T.noisy.some(nx => Math.abs(x - nx) <= 1);
-        const col = p >= 60 ? "#34d399" : p >= 30 ? "#fbbf24" : "#f87171";
-        html += `<div style="padding:4px 8px;border:1px solid ${isNoisy ? "rgba(148,162,180,0.35)" : "rgba(255,255,255,0.14)"};border-radius:6px;font-size:11px;${isNoisy ? "opacity:0.55" : ""}">
-          <span style="color:#cdd9e8">≥${K}°</span> <b style="color:${col}">${Math.round(p)}%</b>${isNoisy ? "<span style=\"font-size:8px;color:#7e8ea4\"> noisy</span>" : ""}</div>`;
+    const snapKey = today + "|" + pt.key;
+    let snap = grades.snaps[snapKey];
+    if (!snap) {
+      const ob = checkpointRead(pt.target);
+      if (!ob) {
+        html += `<div style="font-size:11px;color:#94a2b4;padding:4px 0">${pt.label} checkpoint — no ob within ±40 min yet (feed gap).</div>`;
+        return;
       }
-      html += `</div>`;
-      html += `<div style="font-size:9.5px;color:#7e8ea4;margin-bottom:6px">floor: 95% of these days add at least +${T.floor5.toFixed(1)}°F from here → high ≥ ${(ob.tF + T.floor5).toFixed(1)}°F is the 5th-percentile line. Lay these vs the board; act on gaps ≥10 pts.</div>`;
-    });
+      const skyKnown = ob.sky === "CLR" || ob.sky === "OVC";
+      if (skyKnown) {
+        snap = { date: today, key: pt.key, tF: ob.tF, sky: ob.sky, at: ob.iso };
+        grades.snaps[snapKey] = snap; froze = true;
+      } else {
+        // sky unknown: render both tables live, don't freeze (can't grade honestly)
+        ["CLR","OVC"].forEach(sky => {
+          html += ckptSectionHtml(pt, { tF: ob.tF, sky }, false);
+        });
+        return;
+      }
+    }
+    chip = `${pt.label.toLowerCase()} ${snap.tF.toFixed(0)}° ${snap.sky.toLowerCase()}`;
+    html += ckptSectionHtml(pt, snap, true);
   });
-  html += `<div style="font-size:9px;color:#56657a;margin-top:4px">split-half validated (even vs odd years) on 776 July days, 2001–2026 · anchor = T-group ob nearest the hour · greyed cells flipped between halves — don't lean on them</div>`;
+  if (froze) saveCkptGrades(grades);
+  html += ckptGradeSummaryHtml(grades);
+  html += `<div style="font-size:9px;color:#56657a;margin-top:4px">split-half validated (even vs odd years) on 776 July days, 2001–2026 · anchor = T-group ob nearest the hour, frozen at first read · greyed cells flipped between halves — don't lean on them</div>`;
   body.innerHTML = html;
   if (statusEl) { statusEl.textContent = chip; statusEl.style.color = chip === "pre-10AM" ? "#94a2b4" : "#34d399"; }
+}
+
+function ckptSectionHtml(pt, snap, frozen) {
+  const T = CHECKPOINT_TABLES[pt.key][snap.sky];
+  const call = snap.tF + T.med;
+  const callSettle = Math.round(call);
+  let divergence = "";
+  try {
+    const proj = getDayProjection(state.selectedDate);
+    if (proj && proj.median != null) {
+      const dm = callSettle - Math.round(proj.median);
+      const warn = Math.abs(dm) >= 3;
+      divergence = ` <span style="color:${warn ? "#f87171" : "#7e8ea4"}">· model says ${Math.round(proj.median)}° (${dm === 0 ? "agree" : (dm > 0 ? "+" : "") + dm + "°"})${warn ? " ⚠ they disagree — someone's wrong, size down" : ""}</span>`;
+    }
+  } catch (e) {}
+  let h = `<div style="margin:6px 0 2px;font-size:11px;color:#eef3fa"><b>${pt.label}</b>: ${snap.tF.toFixed(1)}°F, ${snap.sky === "CLR" ? "clear" : "overcast"}${frozen ? "" : " (sky unknown — showing " + snap.sky + ")"} <span style="color:#7e8ea4">· n=${T.n} July days${frozen ? " · frozen" : ""}</span></div>`;
+  h += `<div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin:3px 0 2px">
+    <div style="font-size:24px;font-weight:800;color:#eef3fa;font-variant-numeric:tabular-nums">${callSettle}°</div>
+    <div style="font-size:10px;line-height:1.45;color:#94a2b4">checkpoint call (${call.toFixed(1)}°F) · 50% band ${(snap.tF + T.p25).toFixed(1)}–${(snap.tF + T.p75).toFixed(1)}°F${divergence}</div>
+  </div>`;
+  h += `<div style="display:flex;flex-wrap:wrap;gap:5px;margin:4px 0 8px">`;
+  ckptChips(pt.key, snap.tF, snap.sky).forEach(c => {
+    const col = c.p >= 60 ? "#34d399" : c.p >= 30 ? "#fbbf24" : "#f87171";
+    h += `<div style="padding:4px 8px;border:1px solid ${c.noisy ? "rgba(148,162,180,0.35)" : "rgba(255,255,255,0.14)"};border-radius:6px;font-size:11px;${c.noisy ? "opacity:0.55" : ""}">
+      <span style="color:#cdd9e8">≥${c.K}°</span> <b style="color:${col}">${Math.round(c.p)}%</b>${c.noisy ? "<span style=\"font-size:8px;color:#7e8ea4\"> noisy</span>" : ""}</div>`;
+  });
+  h += `</div>`;
+  h += `<div style="font-size:9.5px;color:#7e8ea4;margin-bottom:6px">floor: 95% of these days add at least +${T.floor5.toFixed(1)}°F from here → high ≥ ${(snap.tF + T.floor5).toFixed(1)}°F is the 5th-percentile line. </div>`;
+  return h;
 }
 
 async function fetchSixHour(force) {
