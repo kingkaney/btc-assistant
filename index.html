@@ -224,6 +224,11 @@
   <div class="panel-head"><span>📶 Live 1-Min Feed</span><span class="accent" id="live1m-status">off</span></div>
   <div class="panel-body" id="live1m-body"></div>
 </div>
+<!-- KRNT 1-MIN: Renton Municipal, ~7mi ENE inland. The burn-off canary — it clears and warms before SEA does. -->
+<div class="panel" id="krnt1m-panel">
+  <div class="panel-head"><span>📶 KRNT 1-Min (Renton)</span><span class="accent" id="krnt1m-status">off</span></div>
+  <div class="panel-body" id="krnt1m-body"></div>
+</div>
 
 <!-- LIVE CONDITIONS SUMMARY (today only) -->
 <div class="panel" id="conditions-panel">
@@ -444,7 +449,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-09.11";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-10.12";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -4852,6 +4857,123 @@ function l1mExport() {
 }
 
 // =============================================================================
+// KRNT 1-MIN (Renton Municipal, ~7mi ENE, inland). Same Synoptic timeseries
+// contract as the KSEA lane, same parser, same whole-°C limitation. Why it
+// earns a slot: Renton sits off the water — on burn-off days it clears and
+// warms BEFORE Sea-Tac. KRNT pulling ahead of KSEA midmorning is the earliest
+// live evidence the deck is breaking; KRNT flat/level with KSEA says the deck
+// is holding. It's a direction canary, not a settlement input — KSEA settles.
+// =============================================================================
+const KRNT_KEY = "ksea_krnt1m_v1";
+function loadKrnt() { try { return JSON.parse(localStorage.getItem(KRNT_KEY) || "{}"); } catch (e) { return {}; } }
+function saveKrnt(o) { try { localStorage.setItem(KRNT_KEY, JSON.stringify(o)); } catch (e) {} }
+
+function krntUseSynoptic() {
+  const tok = getSynopticToken();
+  if (!tok) { alert("No Synoptic token saved — add it in Live Conditions first."); return; }
+  const s = loadKrnt();
+  s.url = `https://api.synopticdata.com/v2/stations/timeseries?stid=KRNT1M&recent=180&vars=air_temp&units=temp|F&obtimezone=utc&token=${tok}`;
+  s.error = null; saveKrnt(s);
+  pollKrnt1m(true);
+}
+
+async function pollKrnt1m(force) {
+  const s = loadKrnt();
+  if (!s.url) { renderKrnt1m(); return; }
+  const now = Date.now();
+  if (!force && s.lastPoll && now - s.lastPoll < 12 * 1000) { renderKrnt1m(); return; }
+  s.lastPoll = now; saveKrnt(s);
+  try {
+    const r = await fetch(s.url);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if (j && j.SUMMARY && j.SUMMARY.RESPONSE_CODE === 2) {
+      throw new Error(String(j.SUMMARY.RESPONSE_MESSAGE || "no access").split(".")[0]);
+    }
+    let arr;
+    if (j && Array.isArray(j.STATION) && j.STATION[0] && j.STATION[0].OBSERVATIONS) {
+      const o = j.STATION[0].OBSERVATIONS;
+      const dts = o.date_time || [], tmp = o.air_temp_set_1 || [];
+      arr = dts.map((dt, i) => ({ t: (/Z$|[+-]\d\d:?\d\d$/.test(dt) ? dt : dt + "Z"), tempF: tmp[i] }));
+    } else {
+      arr = Array.isArray(j) ? j : (j.points || j.data || j.obs || []);
+    }
+    const keepFrom = now - 4 * 86400 * 1000;
+    const pts = {};
+    (s.points || []).forEach(p => { if (p.t >= keepFrom) pts[Math.floor(p.t / 60000)] = p; });
+    arr.map(l1mParsePoint).filter(Boolean).forEach(p => {
+      if (p.t >= keepFrom) pts[Math.floor(p.t / 60000)] = p;
+    });
+    s.points = Object.values(pts).sort((a, b) => a.t - b.t).slice(-6500);
+    s.error = null;
+  } catch (e) {
+    s.error = String((e && e.message) || e);
+  }
+  saveKrnt(s);
+  renderKrnt1m();
+}
+
+function renderKrnt1m() {
+  const body = document.getElementById("krnt1m-body");
+  const statusEl = document.getElementById("krnt1m-status");
+  if (!body) return;
+  const s = loadKrnt();
+  if (!s.url) {
+    const hasTok = typeof getSynopticToken === "function" && getSynopticToken();
+    body.innerHTML = `<div style="font-size:11px;color:#94a2b4;line-height:1.6">${
+      hasTok
+        ? `Renton 1-min lane ready — <a href="#" onclick="krntUseSynoptic();return false" style="color:#34d399;font-weight:600">▶ connect KRNT1M now</a> (uses your saved token).`
+        : `Sleeping — save a Synoptic token in Live Conditions first, then a connect button appears here.`
+    }</div>`;
+    if (statusEl) { statusEl.textContent = "off"; statusEl.style.color = "#94a2b4"; }
+    return;
+  }
+  const pts = s.points || [];
+  if (s.error && !pts.length) {
+    body.innerHTML = `<div style="font-size:11px;color:#f87171">KRNT1M error: ${s.error} <a href="#" onclick="pollKrnt1m(true);return false" style="color:#60a5fa">↻ retry</a></div>`;
+    if (statusEl) { statusEl.textContent = "error"; statusEl.style.color = "#f87171"; }
+    return;
+  }
+  if (!pts.length) {
+    body.innerHTML = `<div style="font-size:11px;color:#94a2b4">connected — waiting for first KRNT1M points…</div>`;
+    if (statusEl) { statusEl.textContent = "…"; statusEl.style.color = "#fbbf24"; }
+    return;
+  }
+  const last = pts[pts.length - 1];
+  const ageMin = Math.round((Date.now() - last.t) / 60000);
+  // today's max (Pacific)
+  const today = ptDateOf(Date.now());
+  const todayPts = pts.filter(p => ptDateOf(p.t) === today);
+  const maxPt = todayPts.length ? todayPts.reduce((a, b) => (b.f > a.f ? b : a)) : null;
+  // delta vs KSEA1M latest (only if both fresh within 10 min of each other)
+  let deltaHtml = "";
+  try {
+    const kp = (loadL1M().points || []);
+    if (kp.length) {
+      const klast = kp[kp.length - 1];
+      if (Math.abs(klast.t - last.t) <= 10 * 60000) {
+        const d = +(last.f - klast.f).toFixed(1);
+        const lead = d >= 1.5, lag = d <= -1.5;
+        const col = lead ? "#34d399" : lag ? "#60a5fa" : "#94a2b4";
+        deltaHtml = `<div style="margin-top:6px;padding:5px 8px;background:rgba(255,255,255,0.04);border-left:2px solid ${col};border-radius:4px;font-size:10.5px;line-height:1.5;color:#cdd9e8">
+          Renton vs Sea-Tac: <b style="color:${col}">${d > 0 ? "+" : ""}${d}°F</b> ${
+            lead ? "— inland running warmer: <b>burn-off signal</b>, the deck is likely breaking east-first."
+            : lag ? "— inland running cooler than the airport (unusual; watch for onshore surge)."
+            : "— tracking together; no burn-off lead yet."}</div>`;
+      }
+    }
+  } catch (e) {}
+  body.innerHTML = `
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+      <div style="font-size:24px;font-weight:800;color:#eef3fa;font-variant-numeric:tabular-nums">${last.f.toFixed(1)}°</div>
+      <div style="font-size:10px;color:#94a2b4;line-height:1.45">latest · ${ageMin}m ago${maxPt ? `<br>1-min max today <b style="color:#fcd34d">${maxPt.f.toFixed(1)}°</b> @ ${new Date(maxPt.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" })}` : ""}</div>
+    </div>
+    ${deltaHtml}
+    <div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.5">whole-°C lane like KSEA1M — direction canary only; KSEA settles the market. ${todayPts.length} pts today · <a href="#" onclick="pollKrnt1m(true);return false" style="color:#60a5fa">↻</a></div>`;
+  if (statusEl) { statusEl.textContent = "LIVE"; statusEl.style.color = "#34d399"; }
+}
+
+// =============================================================================
 // PEAK-DURATION READ — infer hidden tenths from the whole-C 1-min lane.
 // The feed steps in 1.0C (1.8F). A plateau at step S means the true temp sat in
 // [S-0.5, S+0.5)C the whole time but we can't see where. The TELL is duration
@@ -5342,7 +5464,7 @@ function renderAll() {
   // missing day object silently killed everything after it in this list.
   const seq = [
     renderStatus, renderDayStrip, renderProjection, renderAICall, renderDrift,
-    renderBackup, renderBlip, renderLive1m, renderConditions,
+    renderBackup, renderBlip, renderLive1m, renderKrnt1m, renderConditions,
     renderNearbyStations, renderSynopticStations, renderStationDots,
     renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderCheckpoint, renderFeeds,
     renderSkycams, renderBuckets, renderChart, renderCurrent,
@@ -6902,6 +7024,8 @@ setInterval(() => fetchCLI(), 1_800_000); // …and every 30 min (CLI only updat
 setTimeout(() => fetchBlip(), 4000);      // 1-min archive backfill: after first paint…
 setInterval(() => fetchBlip(), 1_800_000); // …then every 30 min (archive lags days anyway)
 setInterval(() => pollLive1m(), 15_000);
+setInterval(() => pollKrnt1m(), 15_000);
+pollKrnt1m();
 fetchSpeci();                              // SPECI watch: on load…
 setInterval(() => fetchSpeci(), 45_000);   // …then every 45s (catch off-cycle specials)
 fetchKalshi();                             // Kalshi board: on load…
