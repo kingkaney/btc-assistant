@@ -449,7 +449,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-10.13";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-10.15";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -3073,6 +3073,11 @@ function renderCheckpoint() {
     { key: "t12", label: "NOON", target: 720 },
   ];
   let html = "", chip = "pre-10AM", froze = false;
+  const viewing = (typeof state !== "undefined" && state.selectedDate) ? state.selectedDate : today;
+  if (viewing !== today) {
+    html += `<div style="margin-bottom:7px;padding:5px 8px;background:rgba(251,191,36,0.08);border-left:2px solid #fbbf24;border-radius:4px;font-size:10px;color:#fde68a">You're viewing ${viewing} — the checkpoint is a <b>live-day</b> tool. Showing TODAY (${today}); ${viewing > today ? "tomorrow arms at 10 AM PT off its own :53 ob" : "past days live in SELF-GRADE below"}.</div>`;
+  }
+  html += `<div style="font-size:9px;letter-spacing:0.6px;color:#7e8ea4;margin-bottom:3px">FOR ${today}</div>`;
   points.forEach(pt => {
     if (nowMin < pt.target) {
       html += `<div style="font-size:11px;color:#94a2b4;padding:4px 0">${pt.label} checkpoint — waiting (arms at ${pt.label === "10 AM" ? "10:00" : "12:00"} PT off the :53 ob).</div>`;
@@ -3114,7 +3119,7 @@ function ckptSectionHtml(pt, snap, frozen) {
   const callSettle = Math.round(call);
   let divergence = "";
   try {
-    const proj = getDayProjection(state.selectedDate);
+    const proj = getDayProjection(ptDateOf(Date.now()));   // always TODAY — the checkpoint is a live-day read
     if (proj && proj.median != null) {
       const dm = callSettle - Math.round(proj.median);
       const warn = Math.abs(dm) >= 3;
@@ -4858,6 +4863,31 @@ function l1mExport() {
 
 const fToC1 = f => ((f - 32) * 5 / 9).toFixed(1);   // °F -> °C, one decimal (settlement-native unit)
 
+// next :53 hourly reveal, Pacific
+function nextRevealStr(ms) {
+  const s = new Date(ms || Date.now()).toLocaleTimeString("en-GB", { timeZone: TZ, hour12: false }).split(":").map(Number);
+  let h = s[0]; const m = s[1];
+  if (m >= 53) h = (h + 1) % 24;
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:53 ${h >= 12 ? "PM" : "AM"}`;
+}
+
+// the truth line under the whole-°C blur: latest KSEA T-group tenths + next reveal
+function tgroupTruthLine() {
+  try {
+    const tg = loadSixHr().tgroups || {};
+    let best = null;
+    Object.keys(tg).forEach(iso => {
+      const ms = Date.parse(iso);
+      if (isFinite(ms) && ms <= Date.now() && (!best || ms > best.ms)) best = { ms, c: tg[iso].c, f: tg[iso].f };
+    });
+    const nm = nextRevealStr();
+    if (!best) return `<div style="margin-top:6px;font-size:10px;color:#94a2b4">truth check: no T-group cached yet · next reveal ~${nm}</div>`;
+    const t = new Date(best.ms).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+    return `<div style="margin-top:6px;padding:4px 8px;background:rgba(147,197,253,0.07);border-left:2px solid #93c5fd;border-radius:4px;font-size:10.5px;line-height:1.5;color:#cdd9e8">truth check — latest T-group <b style="color:#93c5fd">${best.c.toFixed(1)}°C</b> = <b>${best.f.toFixed(1)}°F</b> @ ${t} · the 1-min lane above is the whole-°C blur; this is the real tenths · next reveal ~${nm}</div>`;
+  } catch (e) { return ""; }
+}
+
 // =============================================================================
 // KRNT 1-MIN (Renton Municipal, ~7mi ENE, inland). Same Synoptic timeseries
 // contract as the KSEA lane, same parser, same whole-°C limitation. Why it
@@ -4911,8 +4941,25 @@ async function pollKrnt1m(force) {
   } catch (e) {
     s.error = String((e && e.message) || e);
   }
+  try { await fetchKrntTgroup(s); } catch (e) {}
   saveKrnt(s);
   renderKrnt1m();
+}
+
+async function fetchKrntTgroup(s) {
+  const now = Date.now();
+  if (s.tgPoll && now - s.tgPoll < 5 * 60 * 1000) return;
+  s.tgPoll = now;
+  try {
+    const r = await fetch("https://aviationweather.gov/api/data/metar?ids=KRNT&format=json&hours=2", { headers: { Accept: "application/json" } });
+    if (!r.ok) return;
+    const j = await r.json();
+    (Array.isArray(j) ? j : []).forEach(o => {
+      const t = parseTGroup(o.rawOb || "");
+      const ms = (o.obsTime ? o.obsTime * 1000 : Date.parse(o.reportTime || ""));
+      if (t && isFinite(ms) && (!s.tg || ms > s.tg.ms)) s.tg = { ms, c: t.c, f: t.f };
+    });
+  } catch (e) {}
 }
 
 function renderKrnt1m() {
@@ -4971,6 +5018,7 @@ function renderKrnt1m() {
       <div style="font-size:10px;color:#94a2b4;line-height:1.45">latest · ${ageMin}m ago${maxPt ? `<br>1-min max today <b style="color:#fcd34d">${maxPt.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(maxPt.f)}°C</b> @ ${new Date(maxPt.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" })}` : ""}</div>
     </div>
     ${deltaHtml}
+    ${s.tg ? `<div style="margin-top:6px;padding:4px 8px;background:rgba(147,197,253,0.07);border-left:2px solid #93c5fd;border-radius:4px;font-size:10px;color:#cdd9e8">truth check — KRNT T-group <b style="color:#93c5fd">${s.tg.c.toFixed(1)}°C</b> = <b>${s.tg.f.toFixed(1)}°F</b> @ ${new Date(s.tg.ms).toLocaleTimeString("en-US",{timeZone:TZ,hour:"numeric",minute:"2-digit"})} · next ~${nextRevealStr()}</div>` : `<div style="margin-top:6px;font-size:9.5px;color:#94a2b4">truth check: no KRNT T-group seen yet (hourlies post ~:53) · next ~${nextRevealStr()}</div>`}
     <div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.5">whole-°C lane like KSEA1M — direction canary only; KSEA settles the market. ${todayPts.length} pts today · <a href="#" onclick="pollKrnt1m(true);return false" style="color:#60a5fa">↻</a></div>`;
   if (statusEl) { statusEl.textContent = "LIVE"; statusEl.style.color = "#34d399"; }
 }
@@ -5127,6 +5175,7 @@ function renderLive1m() {
   html += `<div style="display:flex;gap:14px;font-size:12px;color:#eef3fa;font-variant-numeric:tabular-nums">
     <span>latest <b style="color:#fcd34d">${last.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(last.f)}°C</b> <span style="color:#7e8ea4;font-size:10px">${ageMin.toFixed(0)}m ago</span></span>
     <span>1-min max <b style="color:#fcd34d">${mx.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(mx.f)}°C</b> <span style="color:#7e8ea4;font-size:10px">@ ${tStr}</span></span></div>`;
+  html += tgroupTruthLine();
   if (blip) {
     html += `<div style="margin-top:7px;padding:7px 9px;background:rgba(251,191,36,0.10);border-left:2px solid #fbbf24;border-radius:4px;font-size:11px;line-height:1.5;color:#fde68a">
       ⚡ Invisible blip: 1-min max <b>${mx.f.toFixed(1)}°</b> rounds to <b>${Math.round(mx.f)}°</b> — above the visible feed's ${visHigh != null ? visHigh.toFixed(1) + "°" : "?"}. Settle floor is now ${Math.round(mx.f)}°.</div>`;
