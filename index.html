@@ -449,7 +449,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-10.12";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-10.13";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -907,7 +907,7 @@ function renderSynopticStations() {
     html += `
       <div style="color:#eef3fa;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(s.name||"").replace(/"/g,'')}">${s.id || s.name || "—"}</div>
       <div style="color:#94a2b4;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${distDir}${stnPlace(s.name, s.id) ? ` <span style=\"color:#5d6c81;font-size:9px\">\u00b7 ${stnPlace(s.name, s.id)}</span>` : ""}</div>
-      <div style="text-align:right;color:#eef3fa;font-variant-numeric:tabular-nums">${s.tempF.toFixed(1)}°F <span style="color:${ageColor};font-size:10px">· ${age!=null?age.toFixed(0)+"m":"—"}</span></div>
+      <div style="text-align:right;color:#eef3fa;font-variant-numeric:tabular-nums">${s.tempF.toFixed(1)}°F · ${fToC1(s.tempF)}°C <span style="color:${ageColor};font-size:10px">· ${age!=null?age.toFixed(0)+"m":"—"}</span></div>
       <div style="text-align:right;color:${dColor};font-variant-numeric:tabular-nums">${delta==null?"—":(delta>0?"+":"")+delta.toFixed(1)}</div>
     `;
   }
@@ -2103,7 +2103,7 @@ function renderConditions() {
   // Plain-English summary
   const cloud = cloudDescription(c.cloud);
   const wind  = windDescription(c.windMph, c.windDir);
-  const tempPart = c.tempF != null ? `Currently <b style="color:#fcd34d">${c.tempF.toFixed(1)}°F</b>` : "Temp unknown";
+  const tempPart = c.tempF != null ? `Currently <b style="color:#fcd34d">${c.tempF.toFixed(1)}°F</b> <b style="color:#93c5fd">${fToC1(c.tempF)}°C</b>` : "Temp unknown";
   const dewPart  = c.dewF  != null ? `dew ${c.dewF.toFixed(0)}°` : "";
   const rhPart   = rh != null ? `RH ${rh.toFixed(0)}%` : "";
   // the ob's print time — a temperature without its timestamp is a rumor
@@ -4856,6 +4856,8 @@ function l1mExport() {
   document.body.appendChild(a); a.click(); a.remove();
 }
 
+const fToC1 = f => ((f - 32) * 5 / 9).toFixed(1);   // °F -> °C, one decimal (settlement-native unit)
+
 // =============================================================================
 // KRNT 1-MIN (Renton Municipal, ~7mi ENE, inland). Same Synoptic timeseries
 // contract as the KSEA lane, same parser, same whole-°C limitation. Why it
@@ -4965,8 +4967,8 @@ function renderKrnt1m() {
   } catch (e) {}
   body.innerHTML = `
     <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
-      <div style="font-size:24px;font-weight:800;color:#eef3fa;font-variant-numeric:tabular-nums">${last.f.toFixed(1)}°</div>
-      <div style="font-size:10px;color:#94a2b4;line-height:1.45">latest · ${ageMin}m ago${maxPt ? `<br>1-min max today <b style="color:#fcd34d">${maxPt.f.toFixed(1)}°</b> @ ${new Date(maxPt.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" })}` : ""}</div>
+      <div style="font-size:24px;font-weight:800;color:#eef3fa;font-variant-numeric:tabular-nums">${last.f.toFixed(1)}° <span style="font-size:13px;font-weight:700;color:#93c5fd">${fToC1(last.f)}°C</span></div>
+      <div style="font-size:10px;color:#94a2b4;line-height:1.45">latest · ${ageMin}m ago${maxPt ? `<br>1-min max today <b style="color:#fcd34d">${maxPt.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(maxPt.f)}°C</b> @ ${new Date(maxPt.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" })}` : ""}</div>
     </div>
     ${deltaHtml}
     <div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.5">whole-°C lane like KSEA1M — direction canary only; KSEA settles the market. ${todayPts.length} pts today · <a href="#" onclick="pollKrnt1m(true);return false" style="color:#60a5fa">↻</a></div>`;
@@ -5123,8 +5125,8 @@ function renderLive1m() {
 
   let html = urlRow;
   html += `<div style="display:flex;gap:14px;font-size:12px;color:#eef3fa;font-variant-numeric:tabular-nums">
-    <span>latest <b style="color:#fcd34d">${last.f.toFixed(1)}°</b> <span style="color:#7e8ea4;font-size:10px">${ageMin.toFixed(0)}m ago</span></span>
-    <span>1-min max <b style="color:#fcd34d">${mx.f.toFixed(1)}°</b> <span style="color:#7e8ea4;font-size:10px">@ ${tStr}</span></span></div>`;
+    <span>latest <b style="color:#fcd34d">${last.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(last.f)}°C</b> <span style="color:#7e8ea4;font-size:10px">${ageMin.toFixed(0)}m ago</span></span>
+    <span>1-min max <b style="color:#fcd34d">${mx.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(mx.f)}°C</b> <span style="color:#7e8ea4;font-size:10px">@ ${tStr}</span></span></div>`;
   if (blip) {
     html += `<div style="margin-top:7px;padding:7px 9px;background:rgba(251,191,36,0.10);border-left:2px solid #fbbf24;border-radius:4px;font-size:11px;line-height:1.5;color:#fde68a">
       ⚡ Invisible blip: 1-min max <b>${mx.f.toFixed(1)}°</b> rounds to <b>${Math.round(mx.f)}°</b> — above the visible feed's ${visHigh != null ? visHigh.toFixed(1) + "°" : "?"}. Settle floor is now ${Math.round(mx.f)}°.</div>`;
