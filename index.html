@@ -449,7 +449,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-10.15";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-10.16";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -2967,7 +2967,7 @@ function officialSettleFor(date) {
       if (!p || p.skip || p.date !== date || p.max == null) return;
       if (!best || (p.final && !best.final)) best = p;
     });
-    return best ? best.max : null;
+    return best ? { max: best.max, final: !!best.final } : null;
   } catch (e) { return null; }
 }
 
@@ -2992,7 +2992,10 @@ function gradeCheckpointSnaps() {
   let changed = false;
   Object.values(g.snaps).forEach(s => {
     if (s.graded || s.skipped || s.date >= today) return;
-    let settle = officialSettleFor(s.date), src = "CLI";
+    const so = officialSettleFor(s.date);
+    const ageD = (Date.parse(today) - Date.parse(s.date)) / 86400000;
+    // preliminary CLI can be corrected — only trust non-final once the day is 2+ old
+    let settle = (so && (so.final || ageD >= 2)) ? so.max : null, src = "CLI";
     if (settle == null) {
       const fb = tgroupDayMaxFor(s.date);
       // trust the T-group day max only if obs run past 18:30 PT (6:15 clock rule)
@@ -3050,8 +3053,6 @@ function ckptGradeSummaryHtml(g) {
   h += `<div style="font-size:9.5px;color:#7e8ea4;margin-top:3px">point call: MAE ${ptMae.toFixed(1)}° · within ±1°: ${Math.round(ptW1)}% (26-yr expectation: 2.4° / ~24%) · 95% floor held ${floorHeld}/${floorN}</div>`;
   const recent = snaps.sort((a,b) => b.date.localeCompare(a.date)).slice(0,3);
   recent.forEach(s => {
-    const chips = ckptChips(s.key, s.tF, s.sky).filter(c => !c.noisy);
-    const right = chips.filter(c => (s.settle >= c.K) === (c.p >= 50)).length;
     const T2 = CHECKPOINT_TABLES[s.key][s.sky];
     const pred = Math.round(s.tF + T2.med);
     h += `<div style="font-size:9px;color:#56657a">${s.date.slice(5)} ${s.key === "t10" ? "10am" : "noon"} ${s.tF.toFixed(0)}° ${s.sky.toLowerCase()} → called ${pred}°, set ${s.settle}° (${s.settle === pred ? "exact" : (s.settle > pred ? "+" : "") + (s.settle - pred) + "°"}, ${s.src})</div>`;
@@ -4150,7 +4151,13 @@ const BACKUP_META_KEY = "ksea_backup_meta_v1";
 function exportBackup() {
   const dump = { exported: new Date().toISOString(), app: "ksea", keys: {} };
   Object.keys(localStorage).forEach(k => {
-    if (k.indexOf("ksea") === 0 && k !== "ksea_synoptic_token") dump.keys[k] = localStorage.getItem(k);
+    if (k.indexOf("ksea") === 0 && k !== "ksea_synoptic_token") {
+      let v = localStorage.getItem(k);
+      // the 1-min lane URLs embed the Synoptic token — scrub it so a committed
+      // backup can't leak it (the panel's own promise).
+      if (typeof v === "string") v = v.replace(/token=[^&"\s]+/g, "token=REDACTED");
+      dump.keys[k] = v;
+    }
   });
   const blob = new Blob([JSON.stringify(dump, null, 1)], { type: "application/json" });
   const a = document.createElement("a");
@@ -4171,7 +4178,13 @@ function importBackup(ev) {
       const keys = d.keys || {};
       let n = 0;
       Object.keys(keys).forEach(k => {
-        if (k.indexOf("ksea") === 0 && k !== "ksea_synoptic_token") { localStorage.setItem(k, keys[k]); n++; }
+        if (k.indexOf("ksea") === 0 && k !== "ksea_synoptic_token") {
+          let v = keys[k];
+          if (typeof v === "string" && v.indexOf("token=REDACTED") >= 0) {
+            try { const o = JSON.parse(v); if (o && o.url) delete o.url; v = JSON.stringify(o); } catch (e) {}
+          }
+          localStorage.setItem(k, v); n++;
+        }
       });
       alert(`Restored ${n} keys. Synoptic token is never in backups — re-enter it if needed.`);
       try { renderAll(); } catch (e) {}
@@ -4627,7 +4640,12 @@ function refreshAutoPeeks() {
     let body = null;
     try { body = p.querySelector(":scope > .panel-body"); } catch (e) {}
     if (!body) { for (const ch of p.children) if (ch.classList && ch.classList.contains("panel-body")) { body = ch; break; } }
-    const t = (body ? body.textContent : "").trim().replace(/\s+/g, " ");
+    let t = "";
+    try {
+      const clone = body.cloneNode(true);
+      clone.querySelectorAll("div,p,li").forEach(d => d.append(" · "));
+      t = clone.textContent.trim().replace(/(\s*·\s*)+/g, " · ").replace(/\s+/g, " ").replace(/^·\s*|\s*·$/g, "");
+    } catch (e) { t = (body ? body.textContent : "").trim().replace(/\s+/g, " "); }
     el.textContent = t ? (t.length > 120 ? t.slice(0, 120) + "…" : t) : "";
   });
 }
