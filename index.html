@@ -229,6 +229,11 @@
   <div class="panel-head"><span>📶 KRNT 1-Min (Renton)</span><span class="accent" id="krnt1m-status">off</span></div>
   <div class="panel-body" id="krnt1m-body"></div>
 </div>
+<!-- COLLAPSE DECODER: the F->C->F display trap, decoded live. decimal -> direction, hold-time -> lean, :53 T-group -> answer. -->
+<div class="panel" id="collapse-panel">
+  <div class="panel-head"><span>🧩 Collapse Decoder</span><span class="accent" id="collapse-status">—</span></div>
+  <div class="panel-body" id="collapse-body"><div style="font-size:11px;color:#94a2b4">waiting for the 1-min lane…</div></div>
+</div>
 
 <!-- LIVE CONDITIONS SUMMARY (today only) -->
 <div class="panel" id="conditions-panel">
@@ -449,7 +454,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-10.16";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-10.17";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -5042,6 +5047,106 @@ function renderKrnt1m() {
 }
 
 // =============================================================================
+// COLLAPSE DECODER — the verified F->C->F display trap, decoded live.
+// Chain (verified vs TotalNoob + brute force): sensor whole-F -> C -> round ->
+// display F. Every display value maps to exactly 1 or 2 true-F candidates:
+//   decimal .0            -> LOCKED (77.0 = true 77, no twin)
+//   decimal .2 / .4       -> FLOOR read: true = N or N+1 (hidden twin HIGHER)
+//   decimal .6 / .8       -> CEILING read: true = N-1 or N (the number people
+//                            read is best-case; hidden twin LOWER) <- the 79 trap
+// The :53 T-group tenths are the only tie-breaker. Ladder printed on panel.
+// =============================================================================
+function collapsePair(dispF) {
+  const fc = f => (f - 32) * 5 / 9;
+  const cf = c => c * 9 / 5 + 32;
+  const C = Math.round(fc(dispF));
+  const dispExact = +cf(C).toFixed(1);
+  const cands = [];
+  for (let F = Math.round(dispExact) - 2; F <= Math.round(dispExact) + 2; F++) {
+    if (Math.round(fc(F)) === C) cands.push(F);
+  }
+  const settles = [...new Set(cands.map(F => Math.floor(cf(Math.round(fc(F) * 10) / 10) + 0.5)))].sort((a, b) => a - b);
+  const dec = Math.round(dispExact * 10) % 10;
+  const kind = dec === 0 ? "LOCKED" : (dec === 2 || dec === 4) ? "FLOOR" : "CEILING";
+  return { C, dispExact, cands, settles, locked: settles.length === 1, kind };
+}
+
+function renderCollapse() {
+  const body = document.getElementById("collapse-body");
+  const statusEl = document.getElementById("collapse-status");
+  if (!body) return;
+  const pts = (loadL1M().points || []);
+  if (!pts.length) {
+    body.innerHTML = `<div style="font-size:11px;color:#94a2b4">waiting for the 1-min lane — connect KSEA1M above.</div>`;
+    if (statusEl) { statusEl.textContent = "—"; statusEl.style.color = "#94a2b4"; }
+    return;
+  }
+  const last = pts[pts.length - 1];
+  const cp = collapsePair(last.f);
+  const ageMin = Math.round((Date.now() - last.t) / 60000);
+
+  // --- 1. THE TELL ---
+  let tell, tellCol;
+  if (cp.kind === "LOCKED") {
+    tell = `<b>${cp.dispExact}°F is LOCKED</b> — true ${cp.cands[0]}°F, settles <b>${cp.settles[0]}°</b>. No twin, no trap.`;
+    tellCol = "#34d399";
+  } else if (cp.kind === "FLOOR") {
+    tell = `decimal .${Math.round(cp.dispExact*10)%10} = <b>floor read</b> — true is <b>${cp.cands[0]} or ${cp.cands[1]}°F</b>; the number people read (${Math.round(cp.dispExact)}) is the BOTTOM of the pair. Hidden twin is <b>higher</b> (upside surprise).`;
+    tellCol = "#60a5fa";
+  } else {
+    tell = `decimal .${Math.round(cp.dispExact*10)%10} = <b>ceiling read</b> — true is <b>${cp.cands[0]} or ${cp.cands[1]}°F</b>; the number people read (${Math.round(cp.dispExact)}) is the BEST CASE. Hidden twin is <b>lower</b> — the "${Math.round(cp.dispExact)} trap".`;
+    tellCol = "#f87171";
+  }
+  let html = `<div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
+    <div style="font-size:22px;font-weight:800;color:#eef3fa;font-variant-numeric:tabular-nums">${last.f.toFixed(1)}°F</div>
+    <div style="font-size:10px;color:#94a2b4">${fToC1(last.f)}°C reading · ${ageMin}m ago · settles <b style="color:#fcd34d">${cp.settles.join(" or ")}</b></div>
+  </div>
+  <div style="margin-top:6px;padding:6px 9px;background:rgba(255,255,255,0.04);border-left:2px solid ${tellCol};border-radius:4px;font-size:10.5px;line-height:1.55;color:#cdd9e8">${tell}</div>`;
+
+  // --- 2. the duration lean on the day's top step (existing verified engine) ---
+  try {
+    const pr = peakDurationRead(pts);
+    if (pr && !pr.locked && pr.pHigher != null) {
+      const pct = Math.round(pr.pHigher * 100);
+      html += `<div style="margin-top:6px;font-size:10.5px;line-height:1.5;color:#cdd9e8">⏱ day's top display <b>${pr.topDisp}°F</b> (true ${pr.candTrue.join(" or ")}) held <b>${pr.minsAtTop}m</b>${pr.touchedAbove ? `, next step up ×${pr.touchedAbove}` : ""} → duration lean <b style="color:${pct>=65?"#f87171":pct<=35?"#34d399":"#fbbf24"}">P(${pr.hiSettle}°) ≈ ${pct}%</b></div>`;
+    } else if (pr && pr.locked) {
+      html += `<div style="margin-top:6px;font-size:10px;color:#34d399">⏱ day's top display ${pr.topDisp}°F is locked — settles ${pr.loSettle}°, nothing to infer.</div>`;
+    }
+  } catch (e) {}
+
+  // --- 3. T-group resolution ---
+  try {
+    const tg = loadSixHr().tgroups || {};
+    let best = null;
+    Object.keys(tg).forEach(iso => {
+      const ms = Date.parse(iso);
+      if (isFinite(ms) && ms <= Date.now() && (!best || ms > best.ms)) best = { ms, c: tg[iso].c, f: tg[iso].f };
+    });
+    if (best) {
+      const t = new Date(best.ms).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+      const resolves = Math.round((best.f - 32) * 5 / 9) === cp.C;
+      const settle = Math.floor(best.f + 0.5);
+      html += `<div style="margin-top:6px;font-size:10.5px;line-height:1.5;color:#cdd9e8">🔓 last truth print: <b style="color:#93c5fd">${best.c.toFixed(1)}°C</b> = ${best.f.toFixed(1)}°F @ ${t}${resolves ? ` — <b style="color:#34d399">resolves this level: true ${settle}°</b>` : ` (settles ${settle}° · different level than the current display)`} · next ~${nextRevealStr()}</div>`;
+    }
+  } catch (e) {}
+
+  // --- 4. nearby rungs reference ---
+  const baseC = cp.C;
+  html += `<div style="margin-top:7px;display:flex;flex-wrap:wrap;gap:5px">`;
+  for (let C = baseC - 1; C <= baseC + 2; C++) {
+    const r = collapsePair(+(C * 9 / 5 + 32).toFixed(1));
+    html += `<div style="padding:3px 7px;border:1px solid rgba(255,255,255,0.12);border-radius:6px;font-size:9.5px;color:${r.locked ? "#34d399" : "#94a2b4"}">${r.dispExact} → ${r.locked ? r.settles[0] + "° 🔒" : r.settles.join("/")}</div>`;
+  }
+  html += `</div>`;
+  html += `<div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.5">the ladder: decimal → direction · hold-time → lean · :53 T-group → answer. Repeats of the same display add ZERO information — eleven prints of 78.8 is one coin-flip, not eleven confirmations.</div>`;
+  body.innerHTML = html;
+  if (statusEl) {
+    statusEl.textContent = cp.locked ? `${cp.settles[0]}° locked` : `${cp.settles.join("/")}° ${cp.kind.toLowerCase()}`;
+    statusEl.style.color = cp.locked ? "#34d399" : "#fbbf24";
+  }
+}
+
+// =============================================================================
 // PEAK-DURATION READ — infer hidden tenths from the whole-C 1-min lane.
 // The feed steps in 1.0C (1.8F). A plateau at step S means the true temp sat in
 // [S-0.5, S+0.5)C the whole time but we can't see where. The TELL is duration
@@ -5533,7 +5638,7 @@ function renderAll() {
   // missing day object silently killed everything after it in this list.
   const seq = [
     renderStatus, renderDayStrip, renderProjection, renderAICall, renderDrift,
-    renderBackup, renderBlip, renderLive1m, renderKrnt1m, renderConditions,
+    renderBackup, renderBlip, renderLive1m, renderKrnt1m, renderCollapse, renderConditions,
     renderNearbyStations, renderSynopticStations, renderStationDots,
     renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderCheckpoint, renderFeeds,
     renderSkycams, renderBuckets, renderChart, renderCurrent,
@@ -7095,6 +7200,7 @@ setInterval(() => fetchBlip(), 1_800_000); // …then every 30 min (archive lags
 setInterval(() => pollLive1m(), 15_000);
 setInterval(() => pollKrnt1m(), 15_000);
 pollKrnt1m();
+setInterval(() => { try { renderCollapse(); } catch (e) {} }, 15_000);
 fetchSpeci();                              // SPECI watch: on load…
 setInterval(() => fetchSpeci(), 45_000);   // …then every 45s (catch off-cycle specials)
 fetchKalshi();                             // Kalshi board: on load…
