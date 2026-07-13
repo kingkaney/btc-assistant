@@ -454,7 +454,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-12.18";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-13.19";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -5070,14 +5070,18 @@ function renderKrnt1m() {
   const today = ptDateOf(Date.now());
   const todayPts = pts.filter(p => ptDateOf(p.t) === today);
   const maxPt = todayPts.length ? todayPts.reduce((a, b) => (b.f > a.f ? b : a)) : null;
-  // delta vs KSEA1M latest (only if both fresh within 10 min of each other)
+  // delta vs Sea-Tac: freshest lane each side (1-min preferred, 5-min fallback)
   let deltaHtml = "";
   try {
-    const kp = (loadL1M().points || []);
-    if (kp.length) {
+    const kseaLane = freshestKseaLane(25);
+    const krnt5 = (loadKrnt5().points || []);
+    const rSide = (laneAgeMin(pts) != null && laneAgeMin(pts) <= 25) ? pts : (laneAgeMin(krnt5) != null && laneAgeMin(krnt5) <= 25 ? krnt5 : null);
+    const kp = kseaLane.pts || [];
+    if (kp.length && rSide && rSide.length) {
+      const rlast = rSide[rSide.length - 1];
       const klast = kp[kp.length - 1];
-      if (Math.abs(klast.t - last.t) <= 10 * 60000) {
-        const d = +(last.f - klast.f).toFixed(1);
+      if (Math.abs(klast.t - rlast.t) <= 20 * 60000) {
+        const d = +(rlast.f - klast.f).toFixed(1);
         const lead = d >= 1.5, lag = d <= -1.5;
         const col = lead ? "#34d399" : lag ? "#60a5fa" : "#94a2b4";
         deltaHtml = `<div style="margin-top:6px;padding:5px 8px;background:rgba(255,255,255,0.04);border-left:2px solid ${col};border-radius:4px;font-size:10.5px;line-height:1.5;color:#cdd9e8">
@@ -5094,9 +5098,91 @@ function renderKrnt1m() {
       <div style="font-size:10px;color:#94a2b4;line-height:1.45">latest · ${ageMin}m ago${maxPt ? `<br>1-min max today <b style="color:#fcd34d">${maxPt.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(maxPt.f)}°C</b> @ ${new Date(maxPt.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" })}` : ""}</div>
     </div>
     ${deltaHtml}
+    ${staleTagHtml(laneAgeMin(pts), "KRNT 1-min")}
+    ${fiveMinRowHtml(loadKrnt5(), "KRNT")}
     ${s.tg ? `<div style="margin-top:6px;padding:4px 8px;background:rgba(147,197,253,0.07);border-left:2px solid #93c5fd;border-radius:4px;font-size:10px;color:#cdd9e8">truth check — KRNT T-group <b style="color:#93c5fd">${s.tg.c.toFixed(1)}°C</b> = <b>${s.tg.f.toFixed(1)}°F</b> @ ${new Date(s.tg.ms).toLocaleTimeString("en-US",{timeZone:TZ,hour:"numeric",minute:"2-digit"})} · next ~${nextRevealStr()}</div>` : `<div style="margin-top:6px;font-size:9.5px;color:#94a2b4">truth check: no KRNT T-group seen yet (hourlies post ~:53) · next ~${nextRevealStr()}</div>`}
     <div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.5">whole-°C lane like KSEA1M — direction canary only; KSEA settles the market. ${todayPts.length} pts today · <a href="#" onclick="pollKrnt1m(true);return false" style="color:#60a5fa">↻</a></div>`;
   if (statusEl) { statusEl.textContent = "LIVE"; statusEl.style.color = "#34d399"; }
+}
+
+// =============================================================================
+// 5-MINUTE FALLBACK LANE — standard Synoptic stations (stid=KSEA / KRNT), which
+// the base token can access even when the premium 1-minute add-on lapses.
+// Standard KSEA reports ~5-min ASOS obs; KRNT standard is coarser (AWOS ~20m).
+// This lane keeps live temp + day-max + the Renton delta alive; the collapse
+// decoder can use it only when a value sits on a whole-°C rung, and the
+// duration lean stays 1-min-only (its hold-time math needs minute cadence).
+// =============================================================================
+const F5_KEY = "ksea_5min_v1";
+const KRNT5_KEY = "ksea_krnt5_v1";
+function loadF5() { try { return JSON.parse(localStorage.getItem(F5_KEY) || "{}"); } catch (e) { return {}; } }
+function saveF5(o) { try { localStorage.setItem(F5_KEY, JSON.stringify(o)); } catch (e) {} }
+function loadKrnt5() { try { return JSON.parse(localStorage.getItem(KRNT5_KEY) || "{}"); } catch (e) { return {}; } }
+function saveKrnt5(o) { try { localStorage.setItem(KRNT5_KEY, JSON.stringify(o)); } catch (e) {} }
+
+async function poll5mStation(stid, load, save, force) {
+  const s = load();
+  const tok = (typeof getSynopticToken === "function") ? getSynopticToken() : null;
+  if (!tok) { return s; }
+  const now = Date.now();
+  if (!force && s.lastPoll && now - s.lastPoll < 55 * 1000) return s;
+  s.lastPoll = now; save(s);
+  try {
+    const url = `https://api.synopticdata.com/v2/stations/timeseries?stid=${stid}&recent=180&vars=air_temp&units=temp|F&obtimezone=utc&token=${tok}`;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if (j && j.SUMMARY && j.SUMMARY.RESPONSE_CODE === 2) throw new Error(String(j.SUMMARY.RESPONSE_MESSAGE || "no access").split(".")[0]);
+    let arr = [];
+    if (j && Array.isArray(j.STATION) && j.STATION[0] && j.STATION[0].OBSERVATIONS) {
+      const o = j.STATION[0].OBSERVATIONS;
+      const dts = o.date_time || [], tmp = o.air_temp_set_1 || [];
+      arr = dts.map((dt, i) => ({ t: (/Z$|[+-]\d\d:?\d\d$/.test(dt) ? dt : dt + "Z"), tempF: tmp[i] }));
+    }
+    const keepFrom = now - 4 * 86400 * 1000;
+    const pts = {};
+    (s.points || []).forEach(p => { if (p.t >= keepFrom) pts[Math.floor(p.t / 60000)] = p; });
+    arr.map(l1mParsePoint).filter(Boolean).forEach(p => { if (p.t >= keepFrom) pts[Math.floor(p.t / 60000)] = p; });
+    s.points = Object.values(pts).sort((a, b) => a.t - b.t).slice(-2200);
+    s.error = null;
+  } catch (e) { s.error = String((e && e.message) || e); }
+  save(s);
+  return s;
+}
+async function poll5m(force) {
+  await poll5mStation("KSEA", loadF5, saveF5, force);
+  await poll5mStation("KRNT", loadKrnt5, saveKrnt5, force);
+  try { renderLive1m(); } catch (e) {}
+  try { renderKrnt1m(); } catch (e) {}
+  try { renderCollapse(); } catch (e) {}
+}
+
+// lane helpers: freshest usable source for a side
+function laneAgeMin(pts) { return (pts && pts.length) ? Math.round((Date.now() - pts[pts.length - 1].t) / 60000) : null; }
+function freshestKseaLane(maxAgeMin) {
+  const oneM = (loadL1M().points || []), fiveM = (loadF5().points || []);
+  const a1 = laneAgeMin(oneM), a5 = laneAgeMin(fiveM);
+  if (a1 != null && a1 <= maxAgeMin) return { pts: oneM, src: "1-min", age: a1 };
+  if (a5 != null && a5 <= maxAgeMin) return { pts: fiveM, src: "5-min", age: a5 };
+  return { pts: null, src: null, age: Math.min(a1 == null ? 1e9 : a1, a5 == null ? 1e9 : a5) };
+}
+function fiveMinRowHtml(s, label) {
+  const pts = s.points || [];
+  if (s.error && !pts.length) return `<div style="margin-top:6px;font-size:10px;color:#f87171">${label} 5-min lane: ${s.error}</div>`;
+  if (!pts.length) return `<div style="margin-top:6px;font-size:10px;color:#94a2b4">${label} 5-min lane: waiting for first points…</div>`;
+  const last = pts[pts.length - 1];
+  const age = laneAgeMin(pts);
+  const today = ptDateOf(Date.now());
+  const tp = pts.filter(p => ptDateOf(p.t) === today);
+  const mx = tp.length ? tp.reduce((a, b) => (b.f > a.f ? b : a)) : null;
+  return `<div style="margin-top:6px;padding:5px 8px;background:rgba(255,255,255,0.04);border-left:2px solid #a78bfa;border-radius:4px;font-size:10.5px;line-height:1.55;color:#cdd9e8">
+    <b style="color:#a78bfa">5-MIN</b> (standard station): <b style="color:#fcd34d">${last.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(last.f)}°C</b> <span style="color:#7e8ea4">· ${age}m ago${mx ? ` · day max <b style="color:#fcd34d">${mx.f.toFixed(1)}°</b> @ ${new Date(mx.t).toLocaleTimeString("en-US",{timeZone:TZ,hour:"numeric",minute:"2-digit"})}` : ""}</span></div>`;
+}
+function staleTagHtml(ageMin, what) {
+  if (ageMin == null) return "";
+  if (ageMin <= 30) return "";
+  const h = (ageMin / 60).toFixed(1);
+  return `<div style="margin-top:4px;font-size:9.5px;color:#f87171">⚠ ${what} lane is STALE (${h}h old) — access lapsed? It reconnects automatically when reinstated.</div>`;
 }
 
 // =============================================================================
@@ -5128,15 +5214,27 @@ function renderCollapse() {
   const body = document.getElementById("collapse-body");
   const statusEl = document.getElementById("collapse-status");
   if (!body) return;
-  const pts = (loadL1M().points || []);
-  if (!pts.length) {
-    body.innerHTML = `<div style="font-size:11px;color:#94a2b4">waiting for the 1-min lane — connect KSEA1M above.</div>`;
-    if (statusEl) { statusEl.textContent = "—"; statusEl.style.color = "#94a2b4"; }
+  const lane = freshestKseaLane(20);
+  if (!lane.pts || !lane.pts.length) {
+    const a = lane.age >= 1e9 ? null : lane.age;
+    body.innerHTML = `<div style="font-size:11px;color:#94a2b4;line-height:1.6">decoder paused — no fresh KSEA lane (newest point ${a == null ? "never" : (a / 60).toFixed(1) + "h ago"}). It resumes automatically when the 1-min or 5-min feed prints. The :53 T-group truth line below the 1-min panel still works.</div>`;
+    if (statusEl) { statusEl.textContent = "stale"; statusEl.style.color = "#f87171"; }
     return;
   }
+  const pts = lane.pts;
   const last = pts[pts.length - 1];
   const cp = collapsePair(last.f);
-  const ageMin = Math.round((Date.now() - last.t) / 60000);
+  const ageMin = lane.age;
+  // 5-min lane precision guard: only decode values sitting on a whole-°C rung
+  const onRung = Math.abs(last.f - cp.dispExact) < 0.15;
+  if (lane.src === "5-min" && !onRung) {
+    body.innerHTML = `<div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
+      <div style="font-size:22px;font-weight:800;color:#eef3fa">${last.f.toFixed(1)}°F</div>
+      <div style="font-size:10px;color:#94a2b4">${fToC1(last.f)}°C · ${ageMin}m ago · 5-min lane</div></div>
+      <div style="margin-top:6px;font-size:10.5px;line-height:1.55;color:#cdd9e8">This print isn't on a whole-°C rung, so the collapse read doesn't apply to it — the F→C→F trap lives on the 1-min display lane. Nearest rungs: ${collapsePair(last.f).dispExact}°F. The :53 T-group remains the truth source.</div>`;
+    if (statusEl) { statusEl.textContent = "5-min · off-rung"; statusEl.style.color = "#94a2b4"; }
+    return;
+  }
 
   // --- 1. THE TELL ---
   let tell, tellCol;
@@ -5152,12 +5250,14 @@ function renderCollapse() {
   }
   let html = `<div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
     <div style="font-size:22px;font-weight:800;color:#eef3fa;font-variant-numeric:tabular-nums">${last.f.toFixed(1)}°F</div>
-    <div style="font-size:10px;color:#94a2b4">${fToC1(last.f)}°C reading · ${ageMin}m ago · settles <b style="color:#fcd34d">${cp.settles.join(" or ")}</b></div>
+    <div style="font-size:10px;color:#94a2b4">${fToC1(last.f)}°C reading · ${ageMin}m ago · ${lane.src} lane · settles <b style="color:#fcd34d">${cp.settles.join(" or ")}</b></div>
   </div>
   <div style="margin-top:6px;padding:6px 9px;background:rgba(255,255,255,0.04);border-left:2px solid ${tellCol};border-radius:4px;font-size:10.5px;line-height:1.55;color:#cdd9e8">${tell}</div>`;
 
-  // --- 2. the duration lean on the day's top step (existing verified engine) ---
+  // --- 2. the duration lean on the day's top step (1-min lane only — its
+  // hold-time math needs minute cadence; on the 5-min lane it stays honest and sits out) ---
   try {
+    if (lane.src !== "1-min") throw new Error("skip");
     const pr = peakDurationRead(pts);
     if (pr && !pr.locked && pr.pHigher != null) {
       const pct = Math.round(pr.pHigher * 100);
@@ -5165,7 +5265,9 @@ function renderCollapse() {
     } else if (pr && pr.locked) {
       html += `<div style="margin-top:6px;font-size:10px;color:#34d399">⏱ day's top display ${pr.topDisp}°F is locked — settles ${pr.loSettle}°, nothing to infer.</div>`;
     }
-  } catch (e) {}
+  } catch (e) {
+    if (lane.src !== "1-min") html += `<div style="margin-top:6px;font-size:9.5px;color:#94a2b4">⏱ duration lean paused — needs the 1-min lane (hold-time math is minute-based).</div>`;
+  }
 
   // --- 3. T-group resolution ---
   try {
@@ -5351,6 +5453,8 @@ function renderLive1m() {
   html += `<div style="display:flex;gap:14px;font-size:12px;color:#eef3fa;font-variant-numeric:tabular-nums">
     <span>latest <b style="color:#fcd34d">${last.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(last.f)}°C</b> <span style="color:#7e8ea4;font-size:10px">${ageMin.toFixed(0)}m ago</span></span>
     <span>1-min max <b style="color:#fcd34d">${mx.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(mx.f)}°C</b> <span style="color:#7e8ea4;font-size:10px">@ ${tStr}</span></span></div>`;
+  html += staleTagHtml(ageMin, "1-min");
+  html += fiveMinRowHtml(loadF5(), "KSEA");
   html += tgroupTruthLine();
   if (blip) {
     html += `<div style="margin-top:7px;padding:7px 9px;background:rgba(251,191,36,0.10);border-left:2px solid #fbbf24;border-radius:4px;font-size:11px;line-height:1.5;color:#fde68a">
@@ -7254,6 +7358,8 @@ setInterval(() => pollLive1m(), 15_000);
 setInterval(() => pollKrnt1m(), 15_000);
 pollKrnt1m();
 setInterval(() => { try { renderCollapse(); } catch (e) {} }, 15_000);
+setInterval(() => { poll5m().catch(() => {}); }, 60_000);
+poll5m().catch(() => {});
 fetchSpeci();                              // SPECI watch: on load…
 setInterval(() => fetchSpeci(), 45_000);   // …then every 45s (catch off-cycle specials)
 fetchKalshi();                             // Kalshi board: on load…
