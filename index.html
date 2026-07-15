@@ -454,7 +454,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-13.19";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-15.20";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -2978,7 +2978,7 @@ function officialSettleFor(date) {
 
 function tgroupDayMaxFor(date) {
   const tg = loadSixHr().tgroups || {};
-  let maxF = null, latestMin = -1, n = 0;
+  let maxF = null, latestMin = -1, n = 0, peakObs = 0;
   Object.keys(tg).forEach(iso => {
     const ms = Date.parse(iso);
     if (!isFinite(ms) || ptDateOf(ms) !== date) return;
@@ -2987,8 +2987,9 @@ function tgroupDayMaxFor(date) {
     if (maxF == null || f > maxF) maxF = f;
     const mm = ptMinutesOf(ms);
     if (mm > latestMin) latestMin = mm;
+    if (mm >= 780 && mm <= 1110) peakObs++;   // 13:00–18:30 PT: the window the daily max lives in
   });
-  return { maxF, latestMin, n };
+  return { maxF, latestMin, n, peakCovered: peakObs >= 4 };
 }
 
 function resolveSettleFor(date, today) {
@@ -2998,7 +2999,9 @@ function resolveSettleFor(date, today) {
   if (so && (so.final || ageD >= 2)) return { settle: so.max, src: "CLI" };
   const fb = tgroupDayMaxFor(date);
   // trust the T-group day max only if obs run past 18:30 PT (6:15 clock rule)
-  if (fb.maxF != null && fb.latestMin >= 1110) return { settle: Math.round(fb.maxF), src: "T-group" };
+  // require the peak window itself to be covered — a late-night ob alone proves
+  // nothing about the afternoon max (this exact gap mis-graded 3 days in July)
+  if (fb.maxF != null && fb.latestMin >= 1110 && fb.peakCovered) return { settle: Math.round(fb.maxF), src: "T-group" };
   return null;
 }
 
@@ -3015,6 +3018,19 @@ function gradeCheckpointSnaps() {
   const g = loadCkptGrades(); g.snaps = g.snaps || {}; g.dur = g.dur || {};
   const today = ptDateOf(Date.now());
   let changed = false;
+  // self-heal: a T-group grade is provisional — if the final CLI disagrees, correct it
+  const regrade = (e) => {
+    if (!e.graded || e.src !== "T-group") return false;
+    const so = officialSettleFor(e.date);
+    if (so && so.final && so.max !== e.settle) {
+      e.settle = so.max; e.src = "CLI (corrected)";
+      if (e.pick != null && !e.locked) e.hit = (e.pick === so.max);
+      return true;
+    }
+    return false;
+  };
+  Object.values(g.snaps).forEach(s => { if (regrade(s)) changed = true; });
+  Object.values(g.dur || {}).forEach(e => { if (regrade(e)) changed = true; });
   Object.values(g.snaps).forEach(s => {
     if (s.graded || s.skipped || s.date >= today) return;
     const r = resolveSettleFor(s.date, today);
@@ -3034,6 +3050,8 @@ function gradeCheckpointSnaps() {
     });
     Object.values(g.dur).forEach(e => {
       if (e.graded || e.skipped || e.date >= today) return;
+      const dayPts = pts.filter(p => climateDayOfUTC(p.t) === e.date);
+      if (dayPts.length < 8) { e.skipped = true; e.reason = "no 1-min tape for this day"; changed = true; return; }
       const r = resolveSettleFor(e.date, today);
       if (!r) {
         if ((Date.parse(today) - Date.parse(e.date)) / 86400000 > 15) { e.skipped = true; changed = true; }
@@ -3155,7 +3173,9 @@ function renderCheckpoint() {
   });
   // keep today's duration-lean entry current; it freezes naturally when the day rolls
   try {
-    const pr = peakDurationRead(loadL1M().points || []);
+    const livePts = loadL1M().points || [];
+    const liveAge = livePts.length ? (Date.now() - livePts[livePts.length - 1].t) / 60000 : null;
+    const pr = (liveAge != null && liveAge <= 20) ? peakDurationRead(livePts) : null;
     if (pr) {
       const dKey = climateDayOfUTC(Date.now());
       const e = durEntryFrom(pr, dKey);
@@ -5321,7 +5341,7 @@ function peakDurationRead(pts, forDay) {
   if (!pts || pts.length < 8) return null;
   const today = forDay || climateDayOfUTC(Date.now());
   let day = pts.filter(p => climateDayOfUTC(p.t) === today);
-  if (day.length < 8) day = pts;
+  if (day.length < 8) return null;   // no whole-tape fallback: stale tape must never impersonate today
   day = day.slice().sort((a, b) => a.t - b.t);
 
   // --- TotalNoob's verified chain: sensor whole-°F -> °C -> round -> display °F.
@@ -6722,12 +6742,14 @@ function calLogClear() {
 // Kept separate from the core KBFI/KRNT log so neither schema interferes.
 // =============================================================================
 const SYN_LOG_KEY = "ksea_synoptic_log_v1";
-const SYN_LOG_MAX = 20000;   // ~covers months; each row is small
+const SYN_LOG_MAX = 8000;    // rows are ~195 bytes — 20k was a 3.9MB quota bomb; 8k ≈ 1.5MB / ~2 weeks
 
 function synLogRead() {
   try { return JSON.parse(localStorage.getItem(SYN_LOG_KEY) || "[]"); } catch (e) { return []; }
 }
 function synLogWrite(arr) {
+  const cut = Date.now() - 14 * 86400 * 1000;
+  arr = arr.filter(r => r && r.t >= cut).slice(-SYN_LOG_MAX);
   try { localStorage.setItem(SYN_LOG_KEY, JSON.stringify(arr)); return true; }
   catch (e) { console.warn("syn log write failed:", e); return false; }
 }
