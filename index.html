@@ -183,6 +183,11 @@
   <div class="panel-head"><span>🎯 Checkpoint Odds</span><span class="accent" id="checkpoint-status">—</span></div>
   <div class="panel-body" id="checkpoint-body"><div style="font-size:11px;color:#94a2b4">arms at 10 AM PT off the :53 ob…</div></div>
 </div>
+<!-- COMPONENT TRUST: every forecast component graded vs final CLI, ranked by its actual record. Fairness rules in the engine header. -->
+<div class="panel" id="trust-panel">
+  <div class="panel-head"><span>🧠 Component Trust</span><span class="accent" id="trust-status">—</span></div>
+  <div class="panel-body" id="trust-body"><div style="font-size:11px;color:#94a2b4">collecting…</div></div>
+</div>
 <div class="panel" id="speci-panel">
   <div class="panel-head"><span>🚨 SPECI Watch</span><span class="accent" id="speci-status">—</span></div>
 <div class="panel" id="insight-panel">
@@ -454,7 +459,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-15.21";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-15.23";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -472,7 +477,7 @@ const ENSEMBLE_URL = `https://ensemble-api.open-meteo.com/v1/ensemble?latitude=$
 // HRRR-vs-NBM divergence — "the blend is about to be wrong" — which is the
 // tradeable signal. Weights are PROVISIONAL (n=0) and earned via the council
 // log, graded at CLI settle.
-const COUNCIL_MODELS = ["ncep_hrrr_conus", "ecmwf_ifs025", "ncep_nbm_conus", "gfs_seamless"];
+const COUNCIL_MODELS = ["ecmwf_ifs025", "ncep_nbm_conus", "gfs_seamless"];   // HRRR moved to its dedicated endpoint below
 const COUNCIL_SAFE   = ["ecmwf_ifs025", "gfs_seamless"];   // retry subset if an ID 400s
 const COUNCIL_LABEL  = { ncep_hrrr_conus: "HRRR", ecmwf_ifs025: "ECMWF", ncep_nbm_conus: "NBM", gfs_seamless: "GFS" };
 const COUNCIL_W = 0.35;          // provisional nudge weight toward council median
@@ -483,6 +488,25 @@ const COUNCIL_KEY = "ksea_council_v1";
 function loadCouncil() { try { return JSON.parse(localStorage.getItem(COUNCIL_KEY) || "{}"); } catch (e) { return {}; } }
 function saveCouncil(o) { try { localStorage.setItem(COUNCIL_KEY, JSON.stringify(o)); } catch (e) {} }
 
+// HRRR lives on Open-Meteo's dedicated GFS & HRRR endpoint (/v1/gfs). The generic
+// /v1/forecast accepted "ncep_hrrr_conus" without error but silently served GFS in
+// its place — the 11/11 duplication. Two id spellings tried in order; a
+// single-model response comes back unsuffixed as plain temperature_2m.
+const HRRR_IDS = ["ncep_hrrr_conus", "gfs_hrrr"];
+const hrrrUrl = id => `https://api.open-meteo.com/v1/gfs?latitude=${LAT}&longitude=${LON}`
+  + `&hourly=temperature_2m&models=${id}&temperature_unit=fahrenheit&timezone=${TZ}&forecast_days=3`;
+async function fetchHrrr() {
+  for (const id of HRRR_IDS) {
+    try {
+      const r = await fetch(hrrrUrl(id));
+      const j = await r.json();
+      if (!r.ok || (j && j.error)) continue;
+      if (j && j.hourly && Array.isArray(j.hourly.time)) { j._omId = id; return j; }
+    } catch (e) {}
+  }
+  return null;
+}
+
 async function fetchCouncil() {
   const tryFetch = async models => {
     const r = await fetch(councilUrl(models));
@@ -491,17 +515,23 @@ async function fetchCouncil() {
     if (!r.ok) throw new Error("council " + r.status);
     return j;
   };
-  try { return await tryFetch(COUNCIL_MODELS); }
+  let main;
+  try { main = await tryFetch(COUNCIL_MODELS); }
   catch (e) {
-    try { return await tryFetch(COUNCIL_SAFE); }   // one wrong ID must not kill the lane
+    try { main = await tryFetch(COUNCIL_SAFE); }   // one wrong ID must not kill the lane
     catch (e2) { throw e; }
   }
+  let hrrr = null;
+  try { hrrr = await fetchHrrr(); } catch (e) {}
+  return { main, hrrr };
 }
 
 // Parse multi-model hourly payload → per-date per-model daily max (°F).
 // With multiple models Open-Meteo suffixes fields: temperature_2m_ncep_hrrr_conus.
 // HRRR only covers ~2 days; require ≥18 valid hours before a model votes on a date.
-function processCouncil(json) {
+function processCouncil(payload) {
+  const json = (payload && payload.main) ? payload.main : payload;   // legacy cached shape = plain json
+  const hrrrJ = (payload && payload.hrrr) ? payload.hrrr : null;
   if (!json || !json.hourly || !Array.isArray(json.hourly.time)) return;
   const H = json.hourly, times = H.time;
   const byDate = {};
@@ -521,6 +551,24 @@ function processCouncil(json) {
       byDate[d].models[COUNCIL_LABEL[id]] = Math.max(...daily[d]);
     });
   });
+  if (hrrrJ && hrrrJ.hourly && Array.isArray(hrrrJ.hourly.time)) {
+    const HH = hrrrJ.hourly;
+    const arrH = HH["temperature_2m_" + hrrrJ._omId] || HH.temperature_2m;
+    if (Array.isArray(arrH)) {
+      const daily = {};
+      for (let i = 0; i < HH.time.length; i++) {
+        const v = arrH[i];
+        if (v == null || !isFinite(v)) continue;
+        const d = String(HH.time[i]).slice(0, 10);
+        (daily[d] = daily[d] || []).push(v);
+      }
+      Object.keys(daily).forEach(d => {
+        if (daily[d].length < 18) return;
+        (byDate[d] = byDate[d] || {}).models = byDate[d].models || {};
+        byDate[d].models.HRRR = Math.max(...daily[d]);
+      });
+    }
+  }
   Object.keys(byDate).forEach(d => {
     const m = byDate[d].models;
     // duplicate-feed tripwire: 11/11 graded days showed HRRR===GFS to the decimal —
@@ -2985,6 +3033,108 @@ function checkpointProb(grid, x) {
   return { p: last[1], clamped: null };
 }
 
+// =============================================================================
+// COMPONENT TRUST — every forecast component graded against FINAL CLI settles,
+// ranked by measured record. Fairness rules (all enforced in code, not vibes):
+//   truth      = final CLI only (preliminary and T-group grades excluded here)
+//   ENS raw    = accuracy-log rawMedian, morning locks only (snapHour ≤ 12;
+//                evening snapshots are look-ahead, not forecasts)
+//   AI blend   = ai_call predHigh, valid && !repaired (locks 10-11 AM)
+//   NBM/ECMWF/GFS = council morning snapshots (locked ≤ 11 AM)
+//   HRRR       = council snapshots from 2026-07-15 onward ONLY — everything
+//                earlier was the GFS-duplicate feed and is not HRRR data
+//   Checkpoints= round(frozen tF + 26-yr median climb) for t10/t12
+// Attribution ("why wrong") is mechanical splits only — sky regime and 80°+
+// heat days, shown when each cell has n≥4. No narratives are generated.
+// =============================================================================
+const HRRR_VALID_FROM = "2026-07-15";
+function componentTrust() {
+  const settles = {};
+  try { Object.values((loadCLI().products) || {}).forEach(p => { if (p && p.final && p.date && isFinite(p.max)) settles[p.date] = p.max; }); } catch (e) {}
+  const comps = {};
+  const add = (name, d, v) => { if (d in settles && isFinite(v)) (comps[name] = comps[name] || {})[d] = v; };
+  try { const log = accLogRead(); Object.keys(log).forEach(d => { const e = log[d]; if (e && isFinite(e.rawMedian) && e.snapHour != null && e.snapHour <= 12) add("ENS raw", d, e.rawMedian); }); } catch (e) {}
+  try { const ai = loadAICalls(); Object.keys(ai).forEach(d => { const c = ai[d]; if (c && c.valid && !c.repaired && isFinite(c.predHigh)) add("AI blend", d, c.predHigh); }); } catch (e) {}
+  try {
+    const sn = (loadCouncil().snapshots) || {};
+    Object.keys(sn).forEach(d => {
+      const m = (sn[d] || {}).models || {};
+      ["NBM", "ECMWF", "GFS"].forEach(k => { if (isFinite(m[k])) add(k, d, m[k]); });
+      if (isFinite(m.HRRR) && d >= HRRR_VALID_FROM) add("HRRR", d, m.HRRR);
+    });
+  } catch (e) {}
+  const sky = {};
+  try {
+    const snaps = (loadCkptGrades().snaps) || {};
+    Object.values(snaps).forEach(s => {
+      if (!s || !s.date) return;
+      if (s.key === "t10" && s.sky) sky[s.date] = s.sky;
+      const T = (CHECKPOINT_TABLES[s.key] || {})[s.sky];
+      if (T && isFinite(s.tF)) add(s.key === "t10" ? "Ckpt 10AM" : "Ckpt noon", s.date, Math.round(s.tF + T.med));
+    });
+  } catch (e) {}
+  const out = {};
+  Object.keys(comps).forEach(name => {
+    const errs = Object.keys(comps[name]).sort().map(d => ({ d, e: +(comps[name][d] - settles[d]).toFixed(1), sky: sky[d] || null, hot: settles[d] >= 80 }));
+    const v = errs.map(x => x.e), n = v.length;
+    if (!n) return;
+    const cell = a => ({ n: a.length, mae: a.length ? a.reduce((s, x) => s + Math.abs(x), 0) / a.length : null, bias: a.length ? a.reduce((s, x) => s + x, 0) / a.length : null });
+    out[name] = {
+      n, bias: v.reduce((a, b) => a + b, 0) / n, mae: v.reduce((a, b) => a + Math.abs(b), 0) / n,
+      w1: 100 * v.filter(x => Math.abs(x) <= 1).length / n, last: errs.slice(-5),
+      clr: cell(errs.filter(x => x.sky === "CLR").map(x => x.e)), ovc: cell(errs.filter(x => x.sky === "OVC").map(x => x.e)),
+      hot: cell(errs.filter(x => x.hot).map(x => x.e)), cool: cell(errs.filter(x => !x.hot).map(x => x.e)),
+    };
+  });
+  return out;
+}
+
+function renderTrust() {
+  const body = document.getElementById("trust-body");
+  const statusEl = document.getElementById("trust-status");
+  if (!body) return;
+  const t = componentTrust();
+  const names = Object.keys(t);
+  if (!names.length) {
+    body.innerHTML = `<div style="font-size:11px;color:#94a2b4">collecting — needs final CLI settles plus morning-locked component calls.</div>`;
+    if (statusEl) { statusEl.textContent = "n=0"; statusEl.style.color = "#94a2b4"; }
+    return;
+  }
+  const ranked = names.filter(nm => t[nm].n >= 5).sort((a, b) => t[a].mae - t[b].mae);
+  const collecting = names.filter(nm => t[nm].n < 5).sort((a, b) => t[b].n - t[a].n);
+  const sgn = x => (x >= 0 ? "+" : "") + x.toFixed(1);
+  let h = "";
+  ranked.forEach((nm, i) => {
+    const c = t[nm];
+    const chips = c.last.map(x => `<span style="color:${Math.abs(x.e) <= 1 ? "#34d399" : Math.abs(x.e) <= 2 ? "#fbbf24" : "#f87171"}">${sgn(x.e)}</span>`).join(" ");
+    h += `<div style="padding:4px 0;font-size:11px;color:#cdd9e8"><b style="color:${i === 0 ? "#34d399" : "#eef3fa"}">${i + 1}. ${nm}</b> — MAE <b>${c.mae.toFixed(2)}°</b> · bias ${sgn(c.bias)}° · ±1°: ${Math.round(c.w1)}% <span style="color:#7e8ea4">· n=${c.n}</span><br><span style="font-size:9.5px;color:#7e8ea4">last: ${chips}</span></div>`;
+  });
+  // mechanical attribution — only cells with n≥4, only deltas ≥1°
+  const why = [];
+  ranked.forEach(nm => {
+    const c = t[nm];
+    if (c.cool.n >= 4 && c.hot.n >= 4 && Math.abs(c.cool.bias - c.hot.bias) >= 1)
+      why.push(`${nm}: runs ${sgn(c.cool.bias)}° on sub-80° days (n=${c.cool.n}) but ${sgn(c.hot.bias)}° on 80°+ days (n=${c.hot.n})`);
+    if (c.clr.n >= 4 && c.ovc.n >= 4 && Math.abs(c.clr.bias - c.ovc.bias) >= 1)
+      why.push(`${nm}: ${sgn(c.clr.bias)}° on clear mornings (n=${c.clr.n}) vs ${sgn(c.ovc.bias)}° overcast (n=${c.ovc.n})`);
+  });
+  if (why.length) {
+    h += `<div style="margin-top:6px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.08);font-size:10px;letter-spacing:0.5px;color:#7e8ea4">WHY THEY MISS (measured splits, n≥4 per cell)</div>`;
+    why.slice(0, 5).forEach(w => { h += `<div style="font-size:10px;color:#cdd9e8;padding:1px 0">· ${w}</div>`; });
+  } else if (ranked.length) {
+    h += `<div style="margin-top:6px;font-size:9.5px;color:#7e8ea4">attribution splits need n≥4 per cell — still collecting.</div>`;
+  }
+  if (collecting.length) {
+    h += `<div style="margin-top:5px;font-size:9.5px;color:#7e8ea4">collecting (n<5): ${collecting.map(nm => `${nm} n=${t[nm].n}`).join(" · ")}</div>`;
+  }
+  h += `<div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.5">truth = final CLI only · ENS counts morning locks only (post-noon snapshots are look-ahead, excluded) · HRRR history before ${HRRR_VALID_FROM} was the GFS-duplicate feed and is excluded · attribution is measured splits, never narrative.</div>`;
+  body.innerHTML = h;
+  if (statusEl) {
+    statusEl.textContent = ranked.length ? `${ranked[0]} ${t[ranked[0]].mae.toFixed(1)}°` : `collecting`;
+    statusEl.style.color = ranked.length ? "#34d399" : "#94a2b4";
+  }
+}
+
 // --- CHECKPOINT SELF-GRADE: freeze each day's 10AM/noon read, score it against
 // the official settle next morning, and show calibration so the table earns
 // trust with an n instead of a story. Chips derive deterministically from the
@@ -4347,6 +4497,7 @@ function feedsTestList() {
     ["Open-Meteo forecast", FORECAST_URL],
     ["Open-Meteo ensemble", ENSEMBLE_URL],
     ["Model council", councilUrl(COUNCIL_SAFE)],
+    ["HRRR (dedicated /v1/gfs)", hrrrUrl(HRRR_IDS[0])],
     ["api.weather.gov obs", "https://api.weather.gov/stations/KSEA/observations/latest"],
     ["aviationweather (corsproxy)", "https://corsproxy.io/?url=" + encodeURIComponent("https://aviationweather.gov/api/data/metar?ids=KSEA&format=json&hours=2")],
     ["Kalshi data-branch", "https://raw.githubusercontent.com/kingkaney/btc-assistant/data/kalshi.json", { optional404: "not published yet — expected while kalshi-quotes v2 is off; live lane covers market hours" }],
@@ -5859,7 +6010,7 @@ function renderAll() {
     renderStatus, renderDayStrip, renderProjection, renderAICall, renderDrift,
     renderBackup, renderBlip, renderLive1m, renderKrnt1m, renderCollapse, renderConditions,
     renderNearbyStations, renderSynopticStations, renderStationDots,
-    renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderCheckpoint, renderFeeds,
+    renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderCheckpoint, renderTrust, renderFeeds,
     renderSkycams, renderBuckets, renderChart, renderCurrent,
     renderAlertsSummary, renderCalLogStatus, renderCalibPanel, renderAccLogStatus,
   ];
