@@ -454,7 +454,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-15.20";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-15.21";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -522,7 +522,12 @@ function processCouncil(json) {
     });
   });
   Object.keys(byDate).forEach(d => {
-    const m = byDate[d].models, vals = Object.values(m).sort((a, b) => a - b);
+    const m = byDate[d].models;
+    // duplicate-feed tripwire: 11/11 graded days showed HRRR===GFS to the decimal —
+    // the provider is serving GFS in the HRRR slot. A fake "independent" vote must
+    // not skew the median or impersonate the short-range-physics signal.
+    if (m.HRRR != null && m.GFS != null && Math.abs(m.HRRR - m.GFS) < 0.01) delete m.HRRR;
+    const vals = Object.values(m).sort((a, b) => a - b);
     if (!vals.length) { delete byDate[d]; return; }
     byDate[d].median = vals.length % 2 ? vals[(vals.length - 1) / 2] : (vals[vals.length / 2 - 1] + vals[vals.length / 2]) / 2;
     byDate[d].spread = vals[vals.length - 1] - vals[0];
@@ -539,7 +544,9 @@ function processCouncil(json) {
     const pac = pacificNowParts();
     const today = pac.date;
     if (byDate[today] && (!st.snapshots[today] || pac.hour < 11)) {
-      st.snapshots[today] = { lockedAt: new Date().toISOString(), models: byDate[today].models };
+      const mdl = { ...byDate[today].models };
+      const hrrrDup = !("HRRR" in mdl);   // already stripped by the tripwire above when duplicated
+      st.snapshots[today] = { lockedAt: new Date().toISOString(), models: mdl, hrrrDup };
       saveCouncil(st);
     }
   } catch (e) {}
@@ -566,7 +573,12 @@ function gradeCouncil() {
     const o = off[d];
     if (!o || !o.final || typeof o.max !== "number") return;
     const errs = {};
-    Object.keys(st.snapshots[d].models).forEach(k => { errs[k] = +(o.max - st.snapshots[d].models[k]).toFixed(1); });
+    const mm = st.snapshots[d].models || {};
+    Object.keys(mm).forEach(k => {
+      if (mm[k] == null || !isFinite(mm[k])) return;
+      if (k === "HRRR" && mm.GFS != null && Math.abs(mm[k] - mm.GFS) < 0.01) return;   // legacy duplicate rows
+      errs[k] = +(o.max - mm[k]).toFixed(1);
+    });
     st.graded.push({ date: d, settle: o.max, errs });
     changed = true;
   });
@@ -1123,11 +1135,40 @@ function loadCalibOverrides() {
       }
       if (typeof o.enabled === "boolean") CALIB.enabled = o.enabled;
       if (typeof o.biasF === "number" && isFinite(o.biasF)) CALIB.biasF = o.biasF;
+      // 2026-07-15: static biasF retired for the auto trailing-window bias
+      // (backtest n=36: auto 1.92 MAE, raw 2.05, static-3.5 3.59). Re-enable
+      // calibration ONCE; after that the user's toggle is respected again.
+      if (!o.autoBias0715) {
+        CALIB.enabled = true;
+        try { localStorage.setItem("ksea_calib_v1", JSON.stringify({ ...o, enabled: true, autoBias0715: true })); } catch (e3) {}
+      }
     }
   } catch (e) {}
 }
 function saveCalibOverrides() {
-  try { localStorage.setItem("ksea_calib_v1", JSON.stringify({ enabled: CALIB.enabled, biasF: CALIB.biasF })); } catch (e) {}
+  try {
+    let prev = {}; try { prev = JSON.parse(localStorage.getItem("ksea_calib_v1") || "{}") || {}; } catch (e2) {}
+    localStorage.setItem("ksea_calib_v1", JSON.stringify({ ...prev, enabled: CALIB.enabled, biasF: CALIB.biasF }));
+  } catch (e) {}
+}
+
+// AUTO BIAS (2026-07-15): median raw error (forecast − realized) over the last
+// ≤10 graded days in the accuracy log, clamped ±1.5°F, half-weighted. Backtested
+// on the full 36-day log: MAE 1.92 vs raw-untouched 2.05 vs the retired static
+// 3.5°F's 3.59. Under 4 graded days → 0: no correction on thin evidence, and it
+// can never balloon the way the manual knob did (biasF 5 → the July 1-2 wreck).
+function autoBiasF() {
+  try {
+    const log = accLogRead();
+    const errs = Object.keys(log).sort().map(d => log[d])
+      .filter(e => e && typeof e.rawMedian === "number" && typeof e.realizedHigh === "number")
+      .map(e => e.rawMedian - e.realizedHigh)
+      .slice(-10);
+    if (errs.length < 4) return 0;
+    const s = errs.slice().sort((a, b) => a - b);
+    const med = s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+    return Math.max(-1.5, Math.min(1.5, med)) * 0.5;
+  } catch (e) { return 0; }
 }
 
 function seasonOf(date) {
@@ -1284,12 +1325,13 @@ function getDayProjection(date) {
   let kernelStd = hasEns ? 1.2 : 3.0;
   let calInfo = null;
   if (CALIB.enabled) {
-    calMaxes = maxes.map(v => v - CALIB.biasF);               // 1) cool by warm bias
+    const bF = autoBiasF();                                   // static biasF retired 2026-07-15
+    calMaxes = maxes.map(v => v - bF);                        // 1) shift by measured trailing bias
     const targetStd = calibTargetStd(date);                   // 2) widen to realized error
     const memberStd = stdev(calMaxes);
     const k2 = targetStd*targetStd - memberStd*memberStd;     // total var = members + kernel²
     kernelStd = Math.sqrt(Math.max(k2, CALIB.kernelFloorF*CALIB.kernelFloorF));
-    calInfo = { biasF: CALIB.biasF, targetStd, memberStd, season: seasonOf(date), lead: leadIndexOf(date) };
+    calInfo = { biasF: bF, auto: true, targetStd, memberStd, season: seasonOf(date), lead: leadIndexOf(date) };
   }
 
   // ---- MODEL COUNCIL nudge: shift toward multi-model agreement, widen on
@@ -6873,7 +6915,7 @@ function renderCalibPanel() {
     } else if (!CALIB.enabled) {
       sumEl.textContent = "off · showing raw model output";
     } else {
-      sumEl.textContent = `bias −${CALIB.biasF.toFixed(1)}°F · spread widened to realized error`;
+      sumEl.textContent = `auto bias ${autoBiasF() >= 0 ? "−" : "+"}${Math.abs(autoBiasF()).toFixed(1)}°F (trailing 10d) · spread widened to realized error`;
     }
   }
   if (paramsEl) {
@@ -6886,7 +6928,7 @@ function renderCalibPanel() {
       leadLine = `<div>applied to ${leadTxt}: σ ${ci.targetStd.toFixed(1)}°F (member spread ${ci.memberStd.toFixed(1)}°F)</div>`;
     }
     paramsEl.innerHTML =
-      `<div>warm bias correction: −${CALIB.biasF.toFixed(1)}°F</div>` +
+      `<div>auto bias correction: ${autoBiasF() >= 0 ? "−" : "+"}${Math.abs(autoBiasF()).toFixed(1)}°F · median of last 10 graded raw errors, clamp ±1.5, half-weight</div>` +
       `<div>1σ error by season (°F): ${stdline}</div>` +
       leadLine;
   }
@@ -6904,10 +6946,10 @@ function setupCalibUI() {
     });
   }
   if (bias) {
-    bias.value = CALIB.biasF;
+    bias.value = autoBiasF().toFixed(2); bias.readOnly = true; bias.title = "auto-computed from the last 10 graded days — manual knob retired 2026-07-15";
     bias.addEventListener("change", () => {
       const v = parseFloat(bias.value);
-      if (isFinite(v)) { CALIB.biasF = v; saveCalibOverrides(); renderAll(); }
+      /* manual bias retired 2026-07-15 — auto-computed from the accuracy log */
     });
   }
 }
@@ -6960,7 +7002,7 @@ function logAccuracySnapshot() {
     calMedian: r1(proj.median),
     calP10: r1(proj.p10),
     calP90: r1(proj.p90),
-    biasF: CALIB.enabled ? CALIB.biasF : 0,
+    biasF: CALIB.enabled ? +autoBiasF().toFixed(2) : 0,
     targetStd: proj.calInfo ? r1(proj.calInfo.targetStd) : null,
     snappedAt: Date.now(),
   };
