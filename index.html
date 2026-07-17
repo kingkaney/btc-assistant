@@ -188,6 +188,11 @@
   <div class="panel-head"><span>🧠 Component Trust</span><span class="accent" id="trust-status">—</span></div>
   <div class="panel-body" id="trust-body"><div style="font-size:11px;color:#94a2b4">collecting…</div></div>
 </div>
+<!-- LEAD STATIONS: validated multi-station heralds (5-yr corpus, split-half). Wind filter tested and REFUTED - not included. -->
+<div class="panel" id="leadstn-panel">
+  <div class="panel-head"><span>📡 Lead Stations</span><span class="accent" id="leadstn-status">—</span></div>
+  <div class="panel-body" id="leadstn-body"><div style="font-size:11px;color:#94a2b4">arming…</div></div>
+</div>
 <div class="panel" id="speci-panel">
   <div class="panel-head"><span>🚨 SPECI Watch</span><span class="accent" id="speci-status">—</span></div>
 <div class="panel" id="insight-panel">
@@ -459,7 +464,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-15.23";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-16.25";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -3034,6 +3039,154 @@ function checkpointProb(grid, x) {
 }
 
 // =============================================================================
+// LEAD STATIONS — heralds validated on the 5-year Synoptic corpus (2020-2026,
+// warm-season daytime, split-half by day). All triggers are RISE-based; the
+// pasted level-difference logic was rejected (a warm inland afternoon is not a
+// signal). Wind-direction filter was tested and REFUTED (easterlies graded
+// WORST, 84/74%; westerlies fine, 87/85%, n=1,791) — deliberately absent.
+//   D1735 temp herald: Δ30m ≥ +1.2°F while KSEA flat → KSEA +0.8°F within 60m
+//     on 86-89% (base 71-74%), n≈1,180 events/half.
+//   Eastern pair (G3137+C2224): mean Δ30m ≥ +1.0 (each ≥ +0.5), KSEA flat →
+//     84-87%, n≈1,970/half.
+//   D1735 solar burn-off: ≥ +150 W/m² off a <200 base, KSEA flat → KSEA +0.8°F
+//     within 30m on 72-79% vs 57% base, n≈260/half.
+// Every fire is logged and graded vs the live KSEA lane 60m later.
+// =============================================================================
+const LEADSTN_KEY = "ksea_leadstn_v1";
+const HERALD_LOG_KEY = "ksea_herald_log_v1";
+const LEAD_INFO = [
+  { sid: "D1735", loc: "1.7 mi SW",  role: "PRIMARY — strongest lead both methods (ΔMSE +5.8/+6.4%, event 1.35x/1.33x) · solar = burn-off sensor" },
+  { sid: "T144T", loc: "2.5 mi NE",  role: "supportive (+3.4/+4.2%) — road-weather station, not polled live" },
+  { sid: "C2224", loc: "5.3 mi E",   role: "eastern pair (+3.6/+3.6%)" },
+  { sid: "G3137", loc: "5.1 mi E",   role: "eastern pair (+3.1/+3.3%) — NOT the strongest, contrary to the imported claim" },
+  { sid: "F7625", loc: "5.6 mi E · 1,444 ft", role: "hilltop — weakest temp-lead (+1.7/+2.1%); rides above the deck, its sunshine says little about the surface" },
+];
+function loadLeadStn() { try { return JSON.parse(localStorage.getItem(LEADSTN_KEY) || "{}"); } catch (e) { return {}; } }
+function saveLeadStn(o) { try { localStorage.setItem(LEADSTN_KEY, JSON.stringify(o)); } catch (e) {} }
+function loadHeraldLog() { try { return JSON.parse(localStorage.getItem(HERALD_LOG_KEY) || "[]"); } catch (e) { return []; } }
+function saveHeraldLog(a) { try { localStorage.setItem(HERALD_LOG_KEY, JSON.stringify(a.slice(-400))); } catch (e) {} }
+
+async function pollLeadStn(force) {
+  const tok = (typeof getSynopticToken === "function") ? getSynopticToken() : null;
+  if (!tok) return;
+  const s = loadLeadStn();
+  const now = Date.now();
+  if (!force && s.lastPoll && now - s.lastPoll < 110 * 1000) return;
+  s.lastPoll = now; saveLeadStn(s);
+  try {
+    const url = `https://api.synopticdata.com/v2/stations/timeseries?stid=D1735,G3137,C2224&recent=90&vars=air_temp,solar_radiation&units=temp|F&obtimezone=utc&token=${tok}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    if (!r.ok || (j && j.SUMMARY && j.SUMMARY.RESPONSE_CODE === 2)) throw new Error("leadstn fetch");
+    s.stations = {};
+    (j.STATION || []).forEach(st => {
+      const O = st.OBSERVATIONS || {};
+      const times = O.date_time || [];
+      const pts = times.map((dt, i) => ({
+        t: Date.parse(/Z$|[+-]\d\d:?\d\d$/.test(dt) ? dt : dt + "Z"),
+        f: (O.air_temp_set_1 || [])[i],
+        sol: (O.solar_radiation_set_1 || [])[i],
+      })).filter(p => isFinite(p.t) && isFinite(p.f));
+      s.stations[st.STID] = pts.slice(-40);
+    });
+    s.error = null;
+  } catch (e) { s.error = String((e && e.message) || e); }
+  saveLeadStn(s);
+  try { evalHeralds(); } catch (e) {}
+  try { renderLeadStn(); } catch (e) {}
+}
+
+function d30(pts) {
+  if (!pts || !pts.length) return null;
+  const last = pts[pts.length - 1];
+  if (Date.now() - last.t > 20 * 60000) return null;
+  let ref = null;
+  for (const p of pts) {
+    const dm = Math.abs((last.t - p.t) / 60000 - 30);
+    if (dm <= 8 && (!ref || dm < ref.dm)) ref = { dm, p };
+  }
+  return ref ? { dF: +(last.f - ref.p.f).toFixed(1), last, ref: ref.p } : null;
+}
+
+function evalHeralds() {
+  const s = loadLeadStn();
+  if (!s.stations) return;
+  const lane = freshestKseaLane(20);
+  if (!lane.pts || !lane.pts.length) return;
+  const kNow = lane.pts[lane.pts.length - 1];
+  const k30 = d30(lane.pts);
+  if (!k30 || Math.abs(k30.dF) >= 0.5) return;   // heralds only mean something while KSEA is flat
+  const log = loadHeraldLog();
+  const fired = kind => log.some(e => e.kind === kind && Date.now() - e.t < 45 * 60000);
+  const push = (kind, detail) => { log.push({ t: Date.now(), kind, detail, kAt: kNow.f }); saveHeraldLog(log); };
+  const dD = d30(s.stations.D1735);
+  if (dD && dD.dF >= 1.2 && !fired("D1735-temp")) push("D1735-temp", `Δ30m +${dD.dF}°F`);
+  const dG = d30(s.stations.G3137), dC = d30(s.stations.C2224);
+  if (dG && dC && (dG.dF + dC.dF) / 2 >= 1.0 && Math.min(dG.dF, dC.dF) >= 0.5 && !fired("east-pair")) {
+    push("east-pair", `G ${dG.dF > 0 ? "+" : ""}${dG.dF} · C ${dC.dF > 0 ? "+" : ""}${dC.dF}`);
+  }
+  const dPts = s.stations.D1735 || [];
+  const solNow = dPts.length ? dPts[dPts.length - 1].sol : null;
+  const sol30 = (() => { const r = d30(dPts); return r && isFinite(r.ref.sol) ? r.ref.sol : null; })();
+  if (isFinite(solNow) && sol30 != null && sol30 < 200 && solNow - sol30 >= 150 && !fired("solar-break")) {
+    push("solar-break", `${Math.round(sol30)}→${Math.round(solNow)} W/m²`);
+  }
+}
+
+function gradeHeralds() {
+  const lane = freshestKseaLane(999999);
+  const pts = lane.pts || [];
+  if (!pts.length) return loadHeraldLog();
+  const log = loadHeraldLog();
+  let changed = false;
+  log.forEach(e => {
+    if (e.graded || Date.now() - e.t < 62 * 60000) return;
+    const win = pts.filter(p => p.t > e.t && p.t <= e.t + 60 * 60000);
+    if (win.length < 4) { if (Date.now() - e.t > 6 * 3600000) { e.graded = true; e.skipped = true; changed = true; } return; }
+    e.graded = true; e.hit = Math.max(...win.map(p => p.f)) - e.kAt >= 0.8; changed = true;
+  });
+  if (changed) saveHeraldLog(log);
+  return log;
+}
+
+function renderLeadStn() {
+  const body = document.getElementById("leadstn-body");
+  const statusEl = document.getElementById("leadstn-status");
+  if (!body) return;
+  const s = loadLeadStn();
+  const log = gradeHeralds();
+  let h = "";
+  const recent = log.filter(e => Date.now() - e.t < 45 * 60000 && !e.skipped);
+  const STATS = { "D1735-temp": "86–89% within 60m (base 71–74%)", "east-pair": "84–87% within 60m", "solar-break": "72–79% within 30m (base 57%)" };
+  if (recent.length) {
+    recent.slice(-2).forEach(e => {
+      h += `<div style="margin-bottom:6px;padding:6px 9px;background:rgba(52,211,153,0.09);border-left:2px solid #34d399;border-radius:4px;font-size:11px;line-height:1.55;color:#d9fbe9"><b>⚡ ${e.kind}</b> fired ${Math.round((Date.now() - e.t) / 60000)}m ago (${e.detail}) → KSEA step likely: <b>${STATS[e.kind]}</b></div>`;
+    });
+  }
+  const rows = [["D1735", s.stations && s.stations.D1735], ["G3137", s.stations && s.stations.G3137], ["C2224", s.stations && s.stations.C2224]];
+  rows.forEach(([sid, pts]) => {
+    const r = d30(pts);
+    const last = pts && pts.length ? pts[pts.length - 1] : null;
+    const age = last ? Math.round((Date.now() - last.t) / 60000) : null;
+    const sol = (sid === "D1735" && last && isFinite(last.sol)) ? ` · ☀ ${Math.round(last.sol)} W/m²` : "";
+    h += `<div style="font-size:11px;color:#cdd9e8;padding:2px 0"><b>${sid}</b> ${last ? `${last.f.toFixed(1)}° <span style="color:#93c5fd">${fToC1(last.f)}°C</span>` : "—"} ${r ? `· Δ30m <b style="color:${r.dF >= 1.0 ? "#34d399" : r.dF <= -1.0 ? "#60a5fa" : "#94a2b4"}">${r.dF > 0 ? "+" : ""}${r.dF}°</b>` : ""}${sol} <span style="color:#7e8ea4">${age != null ? `· ${age}m` : "· no data"}</span></div>`;
+  });
+  const graded = log.filter(e => e.graded && !e.skipped);
+  if (graded.length) {
+    const hits = graded.filter(e => e.hit).length;
+    h += `<div style="margin-top:5px;font-size:10px;color:#cdd9e8">live record: <b style="color:${hits / graded.length >= 0.7 ? "#34d399" : "#fbbf24"}">${hits}/${graded.length}</b> heralds followed by a KSEA step</div>`;
+  }
+  h += `<div style="margin-top:7px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.08);font-size:10px;letter-spacing:0.5px;color:#7e8ea4">THE INDICATORS · 5-yr validated</div>`;
+  LEAD_INFO.forEach(i => { h += `<div style="font-size:9.5px;color:#94a2b4;padding:1px 0"><b style="color:#cdd9e8">${i.sid}</b> ${i.loc} — ${i.role}</div>`; });
+  h += `<div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.5">rise-based triggers only (level differences rejected) · wind-direction filter tested and refuted — easterlies graded worst, not best · heralds suppressed unless KSEA is flat · every fire self-grades vs the live lane 60m later.</div>`;
+  body.innerHTML = h;
+  if (statusEl) {
+    statusEl.textContent = recent.length ? "⚡ FIRING" : (s.stations ? "armed" : (s.error ? "error" : "—"));
+    statusEl.style.color = recent.length ? "#34d399" : "#94a2b4";
+  }
+}
+
+// =============================================================================
 // COMPONENT TRUST — every forecast component graded against FINAL CLI settles,
 // ranked by measured record. Fairness rules (all enforced in code, not vibes):
 //   truth      = final CLI only (preliminary and T-group grades excluded here)
@@ -3308,7 +3461,7 @@ function ckptGradeSummaryHtml(g) {
   }
   if (durs.length) {
     const hits = durs.filter(e => e.hit).length;
-    h += `<div style="margin-top:5px;font-size:10.5px;color:#cdd9e8">⏱ duration lean: <b style="color:${hits / durs.length >= 0.5 ? "#34d399" : "#f87171"}">${hits}/${durs.length}</b> live <span style="color:#7e8ea4">· went 0/2 on first offline grades — its %s are decoration until n≥10</span></div>`;
+    h += `<div style="margin-top:5px;font-size:10.5px;color:#cdd9e8">⏱ duration lean: <b style="color:${hits / durs.length >= 0.5 ? "#34d399" : "#f87171"}">${hits}/${durs.length}</b> live <span style="color:#7e8ea4">· recal 07-16 on n=10: short holds lean LOW (0/3 hi), long ≈70% hi (5/7) · ~1-in-4 days settle outside the pair entirely</span></div>`;
     durs.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 3).forEach(e => {
       h += `<div style="font-size:9px;color:#56657a">${e.date.slice(5)}: top ${e.topDisp}° held ${e.minsAtTop}m${e.touchedAbove ? ` +${e.touchedAbove}↑` : ""} → picked ${e.pick}°, set ${e.settle}° ${e.hit ? "✓" : "✗"}</div>`;
     });
@@ -5474,7 +5627,7 @@ function renderCollapse() {
     const pr = peakDurationRead(pts);
     if (pr && !pr.locked && pr.pHigher != null) {
       const pct = Math.round(pr.pHigher * 100);
-      html += `<div style="margin-top:6px;font-size:10.5px;line-height:1.5;color:#cdd9e8">⏱ day's top display <b>${pr.topDisp}°F</b> (true ${pr.candTrue.join(" or ")}) held <b>${pr.minsAtTop}m</b>${pr.touchedAbove ? `, next step up ×${pr.touchedAbove}` : ""} → duration lean <b style="color:${pct>=65?"#f87171":pct<=35?"#34d399":"#fbbf24"}">P(${pr.hiSettle}°) ≈ ${pct}%</b>${(() => { try { const ds = Object.values(loadCkptGrades().dur || {}).filter(x => x.graded && !x.locked); return ds.length ? ` <span style="color:#7e8ea4">(live: ${ds.filter(x => x.hit).length}/${ds.length})</span>` : ""; } catch (err) { return ""; } })()}</div>`;
+      html += `<div style="margin-top:6px;font-size:10.5px;line-height:1.5;color:#cdd9e8">⏱ day's top display <b>${pr.topDisp}°F</b> (true ${pr.candTrue.join(" or ")}) held <b>${pr.minsAtTop}m</b>${pr.touchedAbove ? `, next step up ×${pr.touchedAbove}` : ""} → duration lean <b style="color:${pct>=65?"#f87171":pct<=35?"#34d399":"#fbbf24"}">P(${pr.hiSettle}°) ≈ ${pct}%</b>${(() => { try { const ds = Object.values(loadCkptGrades().dur || {}).filter(x => x.graded && !x.locked); return ds.length ? ` <span style="color:#7e8ea4">(live: ${ds.filter(x => x.hit).length}/${ds.length})</span>` : ""; } catch (err) { return ""; } })()} <span style="color:#7e8ea4">· ~1-in-4 days settle OUTSIDE this pair (3/13 this July) — the pick answers "which twin," not "is the top in"</span></div>`;
     } else if (pr && pr.locked) {
       html += `<div style="margin-top:6px;font-size:10px;color:#34d399">⏱ day's top display ${pr.topDisp}°F is locked — settles ${pr.loSettle}°, nothing to infer.</div>`;
     }
@@ -5596,7 +5749,12 @@ function peakDurationRead(pts, forDay) {
     let bandPos;
     if (touchedAbove >= 2) bandPos = 0.90;
     else if (touchedAbove === 1) bandPos = 0.72;
-    else bandPos = 0.38 + 0.34 * (1 - Math.exp(-minsAtTop / 22));   // 0.38..0.72
+    // Recalibrated 2026-07-16 on the 5-min corpus, n=10 verified twin-resolvable
+    // July days: hold <40m + no touch → LOW twin 3/3; hold ≥40m + no touch →
+    // HIGH twin 5/7. The old smooth curve crossed 50% at ~9 minutes and picked
+    // HIGH on nearly everything — direction was right, threshold was broken.
+    // Clamped away from 0/1: n is small and 5-min sampling misses brief touches.
+    else bandPos = minsAtTop >= 40 ? 0.70 : 0.15;
     pHigher = Math.max(0.05, Math.min(0.95, bandPos));
   }
 
@@ -6010,7 +6168,7 @@ function renderAll() {
     renderStatus, renderDayStrip, renderProjection, renderAICall, renderDrift,
     renderBackup, renderBlip, renderLive1m, renderKrnt1m, renderCollapse, renderConditions,
     renderNearbyStations, renderSynopticStations, renderStationDots,
-    renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderCheckpoint, renderTrust, renderFeeds,
+    renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderCheckpoint, renderTrust, renderLeadStn, renderFeeds,
     renderSkycams, renderBuckets, renderChart, renderCurrent,
     renderAlertsSummary, renderCalLogStatus, renderCalibPanel, renderAccLogStatus,
   ];
@@ -7575,6 +7733,8 @@ pollKrnt1m();
 setInterval(() => { try { renderCollapse(); } catch (e) {} }, 15_000);
 setInterval(() => { poll5m().catch(() => {}); }, 60_000);
 poll5m().catch(() => {});
+setInterval(() => { pollLeadStn().catch(() => {}); }, 120_000);
+pollLeadStn(true).catch(() => {});
 fetchSpeci();                              // SPECI watch: on load…
 setInterval(() => fetchSpeci(), 45_000);   // …then every 45s (catch off-cycle specials)
 fetchKalshi();                             // Kalshi board: on load…
