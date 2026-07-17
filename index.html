@@ -464,7 +464,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-16.25";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-17.27";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -3131,6 +3131,16 @@ function evalHeralds() {
   if (isFinite(solNow) && sol30 != null && sol30 < 200 && solNow - sol30 >= 150 && !fired("solar-break")) {
     push("solar-break", `${Math.round(sol30)}→${Math.round(solNow)} W/m²`);
   }
+  // --- COOLING SIDE (validated 2026-07-16: cooling base rate is only 10-11%,
+  // so these carry ~3x lifts — the marine-push flatten signals) ---
+  const pushCool = (kind, detail) => { log.push({ t: Date.now(), kind, detail, kAt: kNow.f, sign: -1 }); saveHeraldLog(log); };
+  if (dD && dD.dF <= -1.2 && !fired("D1735-cool")) pushCool("D1735-cool", `Δ30m ${dD.dF}°F`);
+  if (dG && dC && (dG.dF + dC.dF) / 2 <= -1.0 && !fired("east-cool")) {
+    pushCool("east-cool", `G ${dG.dF} · C ${dC.dF}`);
+  }
+  if (isFinite(solNow) && sol30 != null && sol30 > 400 && solNow - sol30 <= -200 && !fired("solar-collapse")) {
+    pushCool("solar-collapse", `${Math.round(sol30)}→${Math.round(solNow)} W/m²`);
+  }
 }
 
 function gradeHeralds() {
@@ -3143,7 +3153,11 @@ function gradeHeralds() {
     if (e.graded || Date.now() - e.t < 62 * 60000) return;
     const win = pts.filter(p => p.t > e.t && p.t <= e.t + 60 * 60000);
     if (win.length < 4) { if (Date.now() - e.t > 6 * 3600000) { e.graded = true; e.skipped = true; changed = true; } return; }
-    e.graded = true; e.hit = Math.max(...win.map(p => p.f)) - e.kAt >= 0.8; changed = true;
+    e.graded = true;
+    e.hit = (e.sign === -1)
+      ? (Math.min(...win.map(p => p.f)) - e.kAt <= -0.8)
+      : (Math.max(...win.map(p => p.f)) - e.kAt >= 0.8);
+    changed = true;
   });
   if (changed) saveHeraldLog(log);
   return log;
@@ -3157,10 +3171,33 @@ function renderLeadStn() {
   const log = gradeHeralds();
   let h = "";
   const recent = log.filter(e => Date.now() - e.t < 45 * 60000 && !e.skipped);
-  const STATS = { "D1735-temp": "86–89% within 60m (base 71–74%)", "east-pair": "84–87% within 60m", "solar-break": "72–79% within 30m (base 57%)" };
+  // Time-aware stats: the afternoon (3-7 PM PT) is a different regime — the
+  // warm base rate collapses to 20-21% (post-peak rises are rare), so warm
+  // heralds become 2.3x rare-event detectors; cooling base climbs to 43%, so
+  // cool heralds become strong absolute probabilities. Measured 2026-07-17 on
+  // the 5-yr corpus, split-half. Solar kinds keep all-day numbers (untested by window).
+  const heraldStats = (kind, hr) => {
+    const h = (hr != null) ? hr : Math.floor(ptMinutesOf(Date.now()) / 60);
+    const aft = h >= 15 && h < 19;
+    const S = aft ? {
+      "D1735-temp": "47–48% within 60m vs base 20–21% — a 2.3x lift (afternoon regime)",
+      "east-pair": "39–41% vs base 20–21% (≈1.9x, afternoon)",
+      "D1735-cool": "KSEA falls within 60m 68–71% vs base 43% (afternoon — pushes peak now)",
+      "east-cool": "63–64% vs base 43% (afternoon)",
+    } : {
+      "D1735-temp": "86–89% within 60m (base 71–74%)",
+      "east-pair": "84–87% within 60m",
+      "D1735-cool": "KSEA falls within 60m 32–34% vs base 10–11% — a 3.2x lift",
+      "east-cool": "32–34% vs base 10–11% (3.2x)",
+    };
+    S["solar-break"] = "72–79% within 30m (base 57%)";
+    S["solar-collapse"] = "19–26% vs base 10–11% (~2.2x) — clouds arriving SW";
+    return S[kind] || "";
+  };
   if (recent.length) {
     recent.slice(-2).forEach(e => {
-      h += `<div style="margin-bottom:6px;padding:6px 9px;background:rgba(52,211,153,0.09);border-left:2px solid #34d399;border-radius:4px;font-size:11px;line-height:1.55;color:#d9fbe9"><b>⚡ ${e.kind}</b> fired ${Math.round((Date.now() - e.t) / 60000)}m ago (${e.detail}) → KSEA step likely: <b>${STATS[e.kind]}</b></div>`;
+      const cool = e.sign === -1;
+      h += `<div style="margin-bottom:6px;padding:6px 9px;background:${cool ? "rgba(96,165,250,0.10)" : "rgba(52,211,153,0.09)"};border-left:2px solid ${cool ? "#60a5fa" : "#34d399"};border-radius:4px;font-size:11px;line-height:1.55;color:${cool ? "#dbeafe" : "#d9fbe9"}"><b>${cool ? "🧊" : "⚡"} ${e.kind}</b> fired ${Math.round((Date.now() - e.t) / 60000)}m ago (${e.detail}) → ${cool ? "<b>flatten-warning</b> — " : "KSEA step likely: "}<b>${heraldStats(e.kind)}</b></div>`;
     });
   }
   const rows = [["D1735", s.stations && s.stations.D1735], ["G3137", s.stations && s.stations.G3137], ["C2224", s.stations && s.stations.C2224]];
@@ -3178,7 +3215,7 @@ function renderLeadStn() {
   }
   h += `<div style="margin-top:7px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.08);font-size:10px;letter-spacing:0.5px;color:#7e8ea4">THE INDICATORS · 5-yr validated</div>`;
   LEAD_INFO.forEach(i => { h += `<div style="font-size:9.5px;color:#94a2b4;padding:1px 0"><b style="color:#cdd9e8">${i.sid}</b> ${i.loc} — ${i.role}</div>`; });
-  h += `<div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.5">rise-based triggers only (level differences rejected) · wind-direction filter tested and refuted — easterlies graded worst, not best · heralds suppressed unless KSEA is flat · every fire self-grades vs the live lane 60m later.</div>`;
+  h += `<div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.5">rise/fall triggers only (level differences rejected) · wind-direction filter tested and refuted · dew-point surge tested and failed standalone (7/13% vs 10/11% base) · wind-speed trigger inconclusive (units/threshold — needs a dedicated pass) · "eastern rise 1–3 PM → afternoon heating" tested: 90–93% but base is 84–86% — days heat into the afternoon anyway, ≈no edge · heralds suppressed unless KSEA is flat · every fire self-grades vs the live lane 60m later.</div>`;
   body.innerHTML = h;
   if (statusEl) {
     statusEl.textContent = recent.length ? "⚡ FIRING" : (s.stations ? "armed" : (s.error ? "error" : "—"));
