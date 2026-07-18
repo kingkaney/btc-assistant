@@ -155,7 +155,7 @@
 <div class="day-strip" id="day-strip"></div>
 
 <!-- SELECTED DAY SUMMARY -->
-<div class="panel">
+<div class="panel" id="projection-panel">
   <div class="panel-head"><span id="sel-day-title">Projection</span><span class="accent" id="sel-day-conf"></span></div>
   <div class="panel-body">
     <div id="day-summary" style="font-size:13px;line-height:1.5;color:#d8cfc2;margin:0 0 14px;padding:10px 12px;background:rgba(251,191,36,0.10);border-left:2px solid #fcd34d;border-radius:4px">—</div>
@@ -288,6 +288,7 @@
       <div style="font-size:10px;color:#94a2b4">
         <div style="font-size:9px;letter-spacing:0.15em;color:#9ca3af;text-transform:uppercase;margin-bottom:2px">Calibration log</div>
         <div id="cal-log-status">0 observations · logger ready</div>
+        <div id="acc-log-status" style="margin-top:2px">0 days logged</div>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button onclick="calLogDownloadCSV()" style="font:inherit;font-size:10px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.14);padding:4px 10px;border-radius:3px;color:#aab6c6;cursor:pointer">Core CSV</button>
@@ -322,7 +323,7 @@
 </div>
 
 <!-- HOURLY CURVE -->
-<div class="panel">
+<div class="panel" id="chart-panel">
   <div class="panel-head"><span>Hourly Curve + Cloud Cover</span><span class="accent">°F · local</span></div>
   <div class="panel-body">
     <div class="chart-wrap" id="chart"></div>
@@ -416,7 +417,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-18.28";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-18.29";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -7155,29 +7156,6 @@ function renderCalLogStatus() {
 }
 
 // =============================================================================
-// Calibration panel UI
-// =============================================================================
-function setupCalibUI() {
-  const enabled = document.getElementById("calib-enabled");
-  const bias = document.getElementById("calib-bias");
-  if (enabled) {
-    enabled.checked = CALIB.enabled;
-    enabled.addEventListener("change", () => {
-      CALIB.enabled = enabled.checked;
-      saveCalibOverrides();
-      renderAll();
-    });
-  }
-  if (bias) {
-    bias.value = autoBiasF().toFixed(2); bias.readOnly = true; bias.title = "auto-computed from the last 10 graded days — manual knob retired 2026-07-15";
-    bias.addEventListener("change", () => {
-      const v = parseFloat(bias.value);
-      /* manual bias retired 2026-07-15 — auto-computed from the accuracy log */
-    });
-  }
-}
-
-// =============================================================================
 // Forecast-accuracy logger — the data that lets us refit the calibration.
 // Once per calendar day, snapshots that day's forecast (raw + calibrated median,
 // 80% band) at first load. Then tracks the realized high from live obs as the day
@@ -7575,7 +7553,6 @@ function toggleMapLayer(which) {
 loadCalibOverrides();
 setupAlertsUI();
 setupSynopticUI();
-setupCalibUI();
 initMap();
 const tzAbbrEl = document.querySelector(".clock-tz");
 if (tzAbbrEl) {
@@ -7594,8 +7571,7 @@ const PANELS_KEY = "ksea_panels_v1";
   try { saved = JSON.parse(localStorage.getItem(PANELS_KEY) || "{}"); } catch (e) {}
   // collapsed on first run (until the user opens them once):
   const DEFAULT_COLLAPSED = new Set([
-    "leads-panel", "panel-7", "map-panel", "skycam-panel",
-    "edge-panel", "score-panel", "blip-panel", "live1m-panel", "conditions-panel",
+    "leads-panel", "map-panel", "skycam-panel", "live1m-panel", "conditions-panel",
   ]);
   document.querySelectorAll(".panel").forEach((p, i) => {
     const head = p.querySelector(".panel-head");
