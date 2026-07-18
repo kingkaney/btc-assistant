@@ -188,11 +188,6 @@
   <div class="panel-head"><span>🧠 Component Trust</span><span class="accent" id="trust-status">—</span></div>
   <div class="panel-body" id="trust-body"><div style="font-size:11px;color:#94a2b4">collecting…</div></div>
 </div>
-<!-- LEAD STATIONS: validated multi-station heralds (5-yr corpus, split-half). Wind filter tested and REFUTED - not included. -->
-<div class="panel" id="leadstn-panel">
-  <div class="panel-head"><span>📡 Lead Stations</span><span class="accent" id="leadstn-status">—</span></div>
-  <div class="panel-body" id="leadstn-body"><div style="font-size:11px;color:#94a2b4">arming…</div></div>
-</div>
 <div class="panel" id="speci-panel">
   <div class="panel-head"><span>🚨 SPECI Watch</span><span class="accent" id="speci-status">—</span></div>
 <div class="panel" id="insight-panel">
@@ -287,6 +282,8 @@
         <div id="synoptic-token-status" style="font-size:9px;color:#9ca3af;margin-top:4px"></div>
       </div>
     </div>
+    <!-- LEAD INDICATORS: validated heralds, embedded with the station network (own panel retired 2026-07-18) -->
+    <div id="leadstn-body" style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08)"><div style="font-size:11px;color:#94a2b4">arming…</div></div>
     <div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
       <div style="font-size:10px;color:#94a2b4">
         <div style="font-size:9px;letter-spacing:0.15em;color:#9ca3af;text-transform:uppercase;margin-bottom:2px">Calibration log</div>
@@ -298,51 +295,6 @@
         <button onclick="calLogClear()" style="font:inherit;font-size:10px;background:transparent;border:1px solid rgba(255,255,255,0.14);padding:4px 8px;border-radius:3px;color:#9ca3af;cursor:pointer">Clear</button>
       </div>
     </div>
-  </div>
-</div>
-
-<!-- BUCKET PROBABILITIES -->
-<div class="panel">
-  <div class="panel-head"><span>High Probability</span><span class="accent" id="prob-src"></span></div>
-  <div class="panel-body">
-    <div id="bucket-bars"></div>
-    <div id="prob-note" style="font-size:9px;color:#9fb0c4;margin-top:8px"></div>
-  </div>
-</div>
-
-<!-- CALIBRATION -->
-<div class="panel" id="calib-panel">
-  <div class="panel-head" style="cursor:pointer" onclick="toggleCalibExpand()">
-    <span>Calibration <span id="calib-expand-arrow" style="color:#9ca3af;font-size:11px">▸</span></span>
-    <span class="accent" id="calib-mode">on</span>
-  </div>
-  <div id="calib-collapsed-row" style="padding:8px 14px;font-size:11px;color:#aab6c6;border-top:1px solid rgba(255,255,255,0.06)">
-    <span id="calib-collapsed-summary">bias −0.8°F · spread widened to realized error</span>
-  </div>
-  <div class="panel-body" id="calib-expanded" style="display:none;padding-top:6px">
-    <div style="font-size:11px;color:#aab6c6;line-height:1.6">
-      Raw GFS ensembles are over-confident (spread too narrow) and run warm. This layer shifts the forecast cooler by the measured bias and widens the spread to match how far off day-ahead forecasts actually land — so the bucket percentages reflect real uncertainty instead of false precision.
-    </div>
-    <div id="calib-params" style="font-size:10px;color:#94a2b4;margin-top:10px;line-height:1.7;font-variant-numeric:tabular-nums"></div>
-    <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <label style="font-size:11px;color:#aab6c6;display:flex;align-items:center;gap:6px;cursor:pointer">
-        <input id="calib-enabled" type="checkbox" checked style="width:14px;height:14px;cursor:pointer">
-        Calibration ON
-      </label>
-      <span style="font-size:11px;color:#aab6c6;display:flex;align-items:center;gap:6px">
-        Bias
-        <input id="calib-bias" type="number" step="0.1" value="0.8" style="width:56px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.14);padding:3px 6px;border-radius:3px;color:#eef3fa;font-variant-numeric:tabular-nums;text-align:right;font-size:11px">
-        °F
-      </span>
-    </div>
-    <div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-      <div style="font-size:10px;color:#94a2b4">
-        <div style="font-size:9px;letter-spacing:0.15em;color:#9ca3af;text-transform:uppercase;margin-bottom:2px">Forecast-accuracy log</div>
-        <div id="acc-log-status">0 days logged</div>
-      </div>
-      <button onclick="accLogDownloadCSV()" style="font:inherit;font-size:10px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.14);padding:4px 10px;border-radius:3px;color:#aab6c6;cursor:pointer">Forecast CSV</button>
-    </div>
-    <div style="font-size:9px;color:#9ca3af;margin-top:8px;line-height:1.5">The numbers above are starting estimates from the day-1 backtest. The accuracy log records each day's forecast vs. the actual high so they can be refit to your real error over time. Export and send me the CSV after a couple weeks.</div>
   </div>
 </div>
 
@@ -464,7 +416,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-17.27";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-18.28";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -968,14 +920,16 @@ function renderSynopticStations() {
     <div style="color:#9ca3af;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;text-align:right">TEMP · AGE</div>
     <div style="color:#9ca3af;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;text-align:right">VS KSEA</div>
   `;
+  const LEAD_TAGS = { D1735: ["⚡ primary lead", "#34d399"], G3137: ["lead pair", "#a7f3d0"], C2224: ["lead pair", "#a7f3d0"], T144T: ["lead", "#a7f3d0"], F7625: ["hilltop", "#7e8ea4"] };
   for (const s of stns) {
+    const tag = LEAD_TAGS[s.id];
     const age = s.time ? Math.max(0, (Date.now() - s.time.getTime())/60000) : null;
     const delta = kseaTemp != null ? s.tempF - kseaTemp : null;
     const dColor = delta == null ? "#9ca3af" : Math.abs(delta) < 0.5 ? "#9ca3af" : delta > 0 ? "#f59e0b" : "#60a5fa";
     const ageColor = age != null && age < 20 ? "#34d399" : "#9ca3af";
     const distDir = s.distMi != null ? `${s.distMi.toFixed(1)}mi${s.dir ? " " + s.dir : ""}` : "—";
     html += `
-      <div style="color:#eef3fa;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(s.name||"").replace(/"/g,'')}">${s.id || s.name || "—"}</div>
+      <div style="color:#eef3fa;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(s.name||"").replace(/"/g,'')}">${s.id || s.name || "—"}${tag ? ` <span style="font-size:8px;color:${tag[1]}">${tag[0]}</span>` : ""}</div>
       <div style="color:#94a2b4;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${distDir}${stnPlace(s.name, s.id) ? ` <span style=\"color:#5d6c81;font-size:9px\">\u00b7 ${stnPlace(s.name, s.id)}</span>` : ""}</div>
       <div style="text-align:right;color:#eef3fa;font-variant-numeric:tabular-nums">${s.tempF.toFixed(1)}°F · ${fToC1(s.tempF)}°C <span style="color:${ageColor};font-size:10px">· ${age!=null?age.toFixed(0)+"m":"—"}</span></div>
       <div style="text-align:right;color:${dColor};font-variant-numeric:tabular-nums">${delta==null?"—":(delta>0?"+":"")+delta.toFixed(1)}</div>
@@ -1864,32 +1818,6 @@ function renderCouncilStrip(proj) {
     ${flag}
     <div style="margin-top:4px;font-size:9px;line-height:1.5;color:#56657a">${nudge} · obs-climb still overrides as the day develops · <span style="color:#7e8ea4">${gradeLine}</span></div>
   </div>`;
-}
-
-function renderBuckets() {
-  const proj = getDayProjection(state.selectedDate);
-  const barsEl = document.getElementById("bucket-bars");
-  const srcEl = document.getElementById("prob-src");
-  const noteEl = document.getElementById("prob-note");
-  if (!proj) { barsEl.innerHTML = ""; return; }
-
-  srcEl.textContent = state.nMembers ? "ensemble" : "deterministic";
-  const buckets = proj.buckets;
-  const maxP = Math.max(...proj.probs);
-  barsEl.innerHTML = buckets.map((b, i) => {
-    const p = proj.probs[i];
-    const most = p === maxP;
-    return `<div class="bucket-row">
-      <div class="bucket-label${most?" most":""}">${b.label}</div>
-      <div class="bar-track"><div class="bar-fill${most?" most":""}" style="width:${(p*100).toFixed(2)}%"></div></div>
-      <div class="bucket-pct${most?" most":""}">${(p*100).toFixed(1)}%</div>
-    </div>`;
-  }).join("");
-  noteEl.textContent = state.nMembers
-    ? (proj.calibrated && proj.calInfo
-        ? `Buckets centered on ${Math.round(proj.median)}°F · ${proj.nMembers} GFS members, bias-corrected and spread-calibrated to realized error (±${(proj.calInfo.targetStd*1.2816).toFixed(1)}°F).`
-        : `Buckets auto-centered on ${Math.round(proj.median)}°F · from ${proj.nMembers} GFS members (raw, uncalibrated).`)
-    : `Ensemble unavailable — deterministic forecast + synthetic spread.`;
 }
 
 function renderChart() {
@@ -3165,11 +3093,11 @@ function gradeHeralds() {
 
 function renderLeadStn() {
   const body = document.getElementById("leadstn-body");
-  const statusEl = document.getElementById("leadstn-status");
   if (!body) return;
   const s = loadLeadStn();
   const log = gradeHeralds();
-  let h = "";
+  const firing = log.some(e => Date.now() - e.t < 45 * 60000 && !e.skipped);
+  let h = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:9px;letter-spacing:0.15em;color:#9ca3af;text-transform:uppercase">📡 Lead indicators</span><span style="font-size:9px;color:${firing ? "#34d399" : "#9ca3af"}">${firing ? "⚡ FIRING" : (s.stations ? "armed" : "—")}</span></div>`;
   const recent = log.filter(e => Date.now() - e.t < 45 * 60000 && !e.skipped);
   // Time-aware stats: the afternoon (3-7 PM PT) is a different regime — the
   // warm base rate collapses to 20-21% (post-peak rises are rare), so warm
@@ -3217,10 +3145,6 @@ function renderLeadStn() {
   LEAD_INFO.forEach(i => { h += `<div style="font-size:9.5px;color:#94a2b4;padding:1px 0"><b style="color:#cdd9e8">${i.sid}</b> ${i.loc} — ${i.role}</div>`; });
   h += `<div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.5">rise/fall triggers only (level differences rejected) · wind-direction filter tested and refuted · dew-point surge tested and failed standalone (7/13% vs 10/11% base) · wind-speed trigger inconclusive (units/threshold — needs a dedicated pass) · "eastern rise 1–3 PM → afternoon heating" tested: 90–93% but base is 84–86% — days heat into the afternoon anyway, ≈no edge · heralds suppressed unless KSEA is flat · every fire self-grades vs the live lane 60m later.</div>`;
   body.innerHTML = h;
-  if (statusEl) {
-    statusEl.textContent = recent.length ? "⚡ FIRING" : (s.stations ? "armed" : (s.error ? "error" : "—"));
-    statusEl.style.color = recent.length ? "#34d399" : "#94a2b4";
-  }
 }
 
 // =============================================================================
@@ -6206,8 +6130,8 @@ function renderAll() {
     renderBackup, renderBlip, renderLive1m, renderKrnt1m, renderCollapse, renderConditions,
     renderNearbyStations, renderSynopticStations, renderStationDots,
     renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderCheckpoint, renderTrust, renderLeadStn, renderFeeds,
-    renderSkycams, renderBuckets, renderChart, renderCurrent,
-    renderAlertsSummary, renderCalLogStatus, renderCalibPanel, renderAccLogStatus,
+    renderSkycams, renderChart, renderCurrent,
+    renderAlertsSummary, renderCalLogStatus, renderAccLogStatus,
   ];
   seq.forEach(fn => { try { fn(); } catch (e) { try { console.warn("panel render failed:", fn.name, e); } catch (e2) {} } });
   setTimeout(() => { try { refreshAutoPeeks(); } catch (e) {} }, 0);
@@ -7233,53 +7157,6 @@ function renderCalLogStatus() {
 // =============================================================================
 // Calibration panel UI
 // =============================================================================
-function toggleCalibExpand() {
-  const exp = document.getElementById("calib-expanded");
-  const arrow = document.getElementById("calib-expand-arrow");
-  const collapsed = document.getElementById("calib-collapsed-row");
-  if (!exp) return;
-  const open = exp.style.display !== "none";
-  exp.style.display = open ? "none" : "";
-  if (collapsed) collapsed.style.display = open ? "" : "none";
-  if (arrow) arrow.textContent = open ? "▸" : "▾";
-}
-
-function renderCalibPanel() {
-  const modeEl = document.getElementById("calib-mode");
-  const sumEl = document.getElementById("calib-collapsed-summary");
-  const paramsEl = document.getElementById("calib-params");
-  if (modeEl) {
-    modeEl.textContent = CALIB.enabled ? "on" : "off";
-    modeEl.style.color = CALIB.enabled ? "#fcd34d" : "#9ca3af";
-  }
-  // Collapsed one-liner reflects the selected day's applied correction
-  const proj = state.selectedDate ? getDayProjection(state.selectedDate) : null;
-  if (sumEl) {
-    if (CALIB.enabled && proj && proj.calInfo) {
-      const ci = proj.calInfo;
-      sumEl.textContent = `bias −${ci.biasF.toFixed(1)}°F · spread ±${(ci.targetStd*1.2816).toFixed(1)}°F (${ci.season})`;
-    } else if (!CALIB.enabled) {
-      sumEl.textContent = "off · showing raw model output";
-    } else {
-      sumEl.textContent = `auto bias ${autoBiasF() >= 0 ? "−" : "+"}${Math.abs(autoBiasF()).toFixed(1)}°F (trailing 10d) · spread widened to realized error`;
-    }
-  }
-  if (paramsEl) {
-    const seasons = ["winter","spring","summer","fall"];
-    const stdline = seasons.map(s => `${s} ${CALIB.seasonStdF[s].toFixed(1)}`).join(" · ");
-    let leadLine = "";
-    if (proj && proj.calInfo) {
-      const ci = proj.calInfo;
-      const leadTxt = ci.lead === 0 ? "today" : ci.lead === 1 ? "tomorrow" : `+${ci.lead}d`;
-      leadLine = `<div>applied to ${leadTxt}: σ ${ci.targetStd.toFixed(1)}°F (member spread ${ci.memberStd.toFixed(1)}°F)</div>`;
-    }
-    paramsEl.innerHTML =
-      `<div>auto bias correction: ${autoBiasF() >= 0 ? "−" : "+"}${Math.abs(autoBiasF()).toFixed(1)}°F · median of last 10 graded raw errors, clamp ±1.5, half-weight</div>` +
-      `<div>1σ error by season (°F): ${stdline}</div>` +
-      leadLine;
-  }
-}
-
 function setupCalibUI() {
   const enabled = document.getElementById("calib-enabled");
   const bias = document.getElementById("calib-bias");
@@ -7717,8 +7594,8 @@ const PANELS_KEY = "ksea_panels_v1";
   try { saved = JSON.parse(localStorage.getItem(PANELS_KEY) || "{}"); } catch (e) {}
   // collapsed on first run (until the user opens them once):
   const DEFAULT_COLLAPSED = new Set([
+    "leads-panel", "panel-7", "map-panel", "skycam-panel",
     "edge-panel", "score-panel", "blip-panel", "live1m-panel", "conditions-panel",
-    "leads-panel", "panel-7", "calib-panel", "map-panel", "skycam-panel",
   ]);
   document.querySelectorAll(".panel").forEach((p, i) => {
     const head = p.querySelector(".panel-head");
