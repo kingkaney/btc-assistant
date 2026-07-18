@@ -417,7 +417,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-18.29";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-18.30";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -5392,11 +5392,18 @@ function renderKrnt1m() {
     if (statusEl) { statusEl.textContent = "…"; statusEl.style.color = "#fbbf24"; }
     return;
   }
-  const last = pts[pts.length - 1];
+  // hero shows the freshest lane — a dead 1-min feed must never headline as current
+  const a1 = laneAgeMin(pts);
+  const k5pts = (loadKrnt5().points || []);
+  const a5 = laneAgeMin(k5pts);
+  const hero = (a1 != null && a1 <= 30) ? { pts, src: "1-min", age: a1 }
+             : (a5 != null && a5 <= 30) ? { pts: k5pts, src: "5-min", age: a5 } : null;
+  const hpts = (hero ? hero.pts : pts);
+  const last = hpts[hpts.length - 1];
   const ageMin = Math.round((Date.now() - last.t) / 60000);
-  // today's max (Pacific)
+  // today's max (Pacific) from the displayed lane
   const today = ptDateOf(Date.now());
-  const todayPts = pts.filter(p => ptDateOf(p.t) === today);
+  const todayPts = hpts.filter(p => ptDateOf(p.t) === today);
   const maxPt = todayPts.length ? todayPts.reduce((a, b) => (b.f > a.f ? b : a)) : null;
   // delta vs Sea-Tac: freshest lane each side (1-min preferred, 5-min fallback)
   let deltaHtml = "";
@@ -5422,15 +5429,18 @@ function renderKrnt1m() {
   } catch (e) {}
   body.innerHTML = `
     <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
-      <div style="font-size:24px;font-weight:800;color:#eef3fa;font-variant-numeric:tabular-nums">${last.f.toFixed(1)}° <span style="font-size:13px;font-weight:700;color:#93c5fd">${fToC1(last.f)}°C</span></div>
-      <div style="font-size:10px;color:#94a2b4;line-height:1.45">latest · ${ageMin}m ago${maxPt ? `<br>1-min max today <b style="color:#fcd34d">${maxPt.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(maxPt.f)}°C</b> @ ${new Date(maxPt.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" })}` : ""}</div>
+      <div style="font-size:24px;font-weight:800;color:${hero ? "#eef3fa" : "#7e8ea4"};font-variant-numeric:tabular-nums">${last.f.toFixed(1)}° <span style="font-size:13px;font-weight:700;color:#93c5fd">${fToC1(last.f)}°C</span>${hero && hero.src === "5-min" ? ` <span style="font-size:11px;font-weight:700;color:#a78bfa">5-MIN lane</span>` : ""}</div>
+      <div style="font-size:10px;color:#94a2b4;line-height:1.45">${hero ? "latest" : "LAST KNOWN (no fresh lane)"} · ${ageMin}m ago${maxPt ? `<br>max today <b style="color:#fcd34d">${maxPt.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(maxPt.f)}°C</b> @ ${new Date(maxPt.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" })}` : ""}</div>
     </div>
     ${deltaHtml}
-    ${staleTagHtml(laneAgeMin(pts), "KRNT 1-min")}
-    ${fiveMinRowHtml(loadKrnt5(), "KRNT")}
+    ${staleTagHtml(a1, "KRNT 1-min")}
+    ${hero && hero.src === "5-min" ? "" : fiveMinRowHtml(loadKrnt5(), "KRNT")}
     ${s.tg ? `<div style="margin-top:6px;padding:4px 8px;background:rgba(147,197,253,0.07);border-left:2px solid #93c5fd;border-radius:4px;font-size:10px;color:#cdd9e8">truth check — KRNT T-group <b style="color:#93c5fd">${s.tg.c.toFixed(1)}°C</b> = <b>${s.tg.f.toFixed(1)}°F</b> @ ${new Date(s.tg.ms).toLocaleTimeString("en-US",{timeZone:TZ,hour:"numeric",minute:"2-digit"})} · next ~${nextRevealStr()}</div>` : `<div style="margin-top:6px;font-size:9.5px;color:#94a2b4">truth check: no KRNT T-group seen yet (hourlies post ~:53) · next ~${nextRevealStr()}</div>`}
     <div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.5">whole-°C lane like KSEA1M — direction canary only; KSEA settles the market. ${todayPts.length} pts today · <a href="#" onclick="pollKrnt1m(true);return false" style="color:#60a5fa">↻</a></div>`;
-  if (statusEl) { statusEl.textContent = "LIVE"; statusEl.style.color = "#34d399"; }
+  if (statusEl) {
+    const st = hero ? (hero.src === "1-min" ? ["LIVE", "#34d399"] : ["5-MIN", "#a78bfa"]) : ["STALE", "#f87171"];
+    statusEl.textContent = st[0]; statusEl.style.color = st[1];
+  }
 }
 
 // =============================================================================
@@ -5761,12 +5771,18 @@ function renderLive1m() {
     return;
   }
 
-  const last = pts[pts.length - 1];
+  // hero = freshest lane; the stale tape must never impersonate today
+  const a1k = laneAgeMin(pts);
+  const f5pts = (loadF5().points || []);
+  const a5k = laneAgeMin(f5pts);
+  const hero = (a1k != null && a1k <= 30) ? { pts, src: "1-min", age: a1k }
+             : (a5k != null && a5k <= 30) ? { pts: f5pts, src: "5-min", age: a5k } : null;
+  const hpts = (hero ? hero.pts : pts);
+  const last = hpts[hpts.length - 1];
   const ageMin = (Date.now() - last.t) / 60000;
   const today = climateDayOfUTC(Date.now());
-  let todayPts = pts.filter(p => climateDayOfUTC(p.t) === today);
-  if (!todayPts.length) todayPts = pts;
-  let mx = todayPts[0];
+  const todayPts = hpts.filter(p => climateDayOfUTC(p.t) === today);
+  let mx = todayPts.length ? todayPts[0] : null;
   todayPts.forEach(p => { if (p.f > mx.f) mx = p; });
 
   // visible high from the regular feed, for comparison
@@ -5778,21 +5794,24 @@ function renderLive1m() {
     });
   } catch (e) {}
 
-  const blip = visHigh != null && Math.round(mx.f) > Math.round(visHigh);
-  if (statusEl) statusEl.textContent = blip ? "⚡ blip" : "live";
-  const tStr = new Date(mx.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+  const blip = hero && hero.src === "1-min" && mx && visHigh != null && Math.round(mx.f) > Math.round(visHigh);
+  if (statusEl) {
+    const st = hero ? (hero.src === "1-min" ? [blip ? "⚡ blip" : "live", blip ? "#fbbf24" : "#34d399"] : ["5-MIN", "#a78bfa"]) : ["STALE", "#f87171"];
+    statusEl.textContent = st[0]; statusEl.style.color = st[1];
+  }
+  const tStr = mx ? new Date(mx.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }) : "";
 
   let html = urlRow;
   html += `<div style="display:flex;gap:14px;font-size:12px;color:#eef3fa;font-variant-numeric:tabular-nums">
-    <span>latest <b style="color:#fcd34d">${last.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(last.f)}°C</b> <span style="color:#7e8ea4;font-size:10px">${ageMin.toFixed(0)}m ago</span></span>
-    <span>1-min max <b style="color:#fcd34d">${mx.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(mx.f)}°C</b> <span style="color:#7e8ea4;font-size:10px">@ ${tStr}</span></span></div>`;
-  html += staleTagHtml(ageMin, "1-min");
-  html += fiveMinRowHtml(loadF5(), "KSEA");
+    <span>latest <b style="color:#fcd34d">${last.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(last.f)}°C</b> <span style="color:#7e8ea4;font-size:10px">${ageMin.toFixed(0)}m ago</span>${hero && hero.src === "5-min" ? ` <b style="color:#a78bfa;font-size:10px">5-MIN lane</b>` : (hero ? "" : ` <b style="color:#f87171;font-size:10px">no fresh lane</b>`)}</span>
+    ${mx ? `<span>max today <b style="color:#fcd34d">${mx.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(mx.f)}°C</b> <span style="color:#7e8ea4;font-size:10px">@ ${tStr}</span></span>` : ""}</div>`;
+  html += staleTagHtml(a1k, "1-min");
+  if (!(hero && hero.src === "5-min")) html += fiveMinRowHtml(loadF5(), "KSEA");
   html += tgroupTruthLine();
   if (blip) {
     html += `<div style="margin-top:7px;padding:7px 9px;background:rgba(251,191,36,0.10);border-left:2px solid #fbbf24;border-radius:4px;font-size:11px;line-height:1.5;color:#fde68a">
       ⚡ Invisible blip: 1-min max <b>${mx.f.toFixed(1)}°</b> rounds to <b>${Math.round(mx.f)}°</b> — above the visible feed's ${visHigh != null ? visHigh.toFixed(1) + "°" : "?"}. Settle floor is now ${Math.round(mx.f)}°.</div>`;
-  } else if (visHigh != null) {
+  } else if (hero && hero.src === "1-min" && visHigh != null) {
     html += `<div style="margin-top:6px;font-size:10px;color:#94a2b4">No invisible blips so far — 1-min max agrees with the visible feed (${visHigh.toFixed(1)}°).</div>`;
   }
   // Precision check: is this feed tenths, or the whole-°C artifact lane?
