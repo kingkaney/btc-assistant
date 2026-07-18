@@ -417,7 +417,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-18.30";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-18.31";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -3108,19 +3108,22 @@ function renderLeadStn() {
   const heraldStats = (kind, hr) => {
     const h = (hr != null) ? hr : Math.floor(ptMinutesOf(Date.now()) / 60);
     const aft = h >= 15 && h < 19;
+    // Magnitudes measured 2026-07-18 (5-yr corpus, split-half): KSEA's lane steps
+    // in 1.8°F rungs, so moves quantize — sizes below are median [p25,p75] of the
+    // 60m extreme after each fire (30m for solar-break), n=95–2,360 per cell.
     const S = aft ? {
-      "D1735-temp": "47–48% within 60m vs base 20–21% — a 2.3x lift (afternoon regime)",
-      "east-pair": "39–41% vs base 20–21% (≈1.9x, afternoon)",
-      "D1735-cool": "KSEA falls within 60m 68–71% vs base 43% (afternoon — pushes peak now)",
-      "east-cool": "63–64% vs base 43% (afternoon)",
+      "D1735-temp": "47–48% within 60m vs base 20–21% — 2.3x (afternoon) · size: ≈coin-flip for one rung (+1.8°)",
+      "east-pair": "39–41% vs base 20–21% (≈1.9x, afternoon) · size: ~40% chance of one rung (+1.8°)",
+      "D1735-cool": "KSEA falls within 60m 68–71% vs base 43% (afternoon — pushes peak now) · size: typically −1.8°, worst quarter ≤−3.6°",
+      "east-cool": "63–64% vs base 43% (afternoon) · size: typically −1.8°, quarter reach −3.6°",
     } : {
-      "D1735-temp": "86–89% within 60m (base 71–74%)",
-      "east-pair": "84–87% within 60m",
-      "D1735-cool": "KSEA falls within 60m 32–34% vs base 10–11% — a 3.2x lift",
-      "east-cool": "32–34% vs base 10–11% (3.2x)",
+      "D1735-temp": "86–89% within 60m (base 71–74%) · size: typically +1.8° (one rung), top quarter +3.6°",
+      "east-pair": "84–87% within 60m · size: typically +1.8°, top quarter +3.6°",
+      "D1735-cool": "KSEA falls within 60m 32–34% vs base 10–11% — 3.2x · size: median holds flat; worst quarter −1.8°",
+      "east-cool": "32–34% vs base 10–11% (3.2x) · size: median holds; worst quarter −1.8°",
     };
-    S["solar-break"] = "72–79% within 30m (base 57%)";
-    S["solar-collapse"] = "19–26% vs base 10–11% (~2.2x) — clouds arriving SW";
+    S["solar-break"] = "72–79% within 30m (base 57%) · size: typically +1.8° within 30m";
+    S["solar-collapse"] = "19–26% vs base 10–11% (~2.2x) — clouds arriving SW · size: median = climb STALLS; 1-in-4 falls ≥1.8°, 1-in-4 climbs anyway";
     return S[kind] || "";
   };
   if (recent.length) {
