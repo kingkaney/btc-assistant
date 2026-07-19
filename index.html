@@ -417,7 +417,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-18.31";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-19.32";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -3143,7 +3143,16 @@ function renderLeadStn() {
   const graded = log.filter(e => e.graded && !e.skipped);
   if (graded.length) {
     const hits = graded.filter(e => e.hit).length;
-    h += `<div style="margin-top:5px;font-size:10px;color:#cdd9e8">live record: <b style="color:${hits / graded.length >= 0.7 ? "#34d399" : "#fbbf24"}">${hits}/${graded.length}</b> heralds followed by a KSEA step</div>`;
+    // per-kind split (2026-07-19): fresh-window reconstruction showed east-pair at
+    // 85% (40/47, matching backtest) but D1735-temp at 56% (10/18, BELOW base) —
+    // the aggregate number hides exactly that question, so each kind shows its own.
+    const byKind = {};
+    graded.forEach(e => { (byKind[e.kind] = byKind[e.kind] || [0, 0])[1]++; if (e.hit) byKind[e.kind][0]++; });
+    const kinds = Object.keys(byKind).sort().map(k => {
+      const [kh, kn] = byKind[k];
+      return `${k} <b style="color:${kh / kn >= 0.6 ? "#34d399" : kh / kn >= 0.3 ? "#fbbf24" : "#f87171"}">${kh}/${kn}</b>`;
+    }).join(" · ");
+    h += `<div style="margin-top:5px;font-size:10px;color:#cdd9e8">live record: <b style="color:${hits / graded.length >= 0.7 ? "#34d399" : "#fbbf24"}">${hits}/${graded.length}</b> overall · ${kinds}</div>`;
   }
   h += `<div style="margin-top:7px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.08);font-size:10px;letter-spacing:0.5px;color:#7e8ea4">THE INDICATORS · 5-yr validated</div>`;
   LEAD_INFO.forEach(i => { h += `<div style="font-size:9.5px;color:#94a2b4;padding:1px 0"><b style="color:#cdd9e8">${i.sid}</b> ${i.loc} — ${i.role}</div>`; });
