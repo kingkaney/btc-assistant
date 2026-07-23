@@ -417,7 +417,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-19.32";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-23.33";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -479,9 +479,10 @@ async function fetchCouncil() {
     try { main = await tryFetch(COUNCIL_SAFE); }   // one wrong ID must not kill the lane
     catch (e2) { throw e; }
   }
-  let hrrr = null;
-  try { hrrr = await fetchHrrr(); } catch (e) {}
-  return { main, hrrr };
+  let hrrr = null, hrrrErr = null;
+  try { hrrr = await fetchHrrr(); if (!hrrr) hrrrErr = "both ids rejected/empty on /v1/gfs"; }
+  catch (e) { hrrrErr = String((e && e.message) || e); }
+  return { main, hrrr, hrrrErr };
 }
 
 // Parse multi-model hourly payload → per-date per-model daily max (°F).
@@ -551,8 +552,12 @@ function processCouncil(payload) {
     const today = pac.date;
     if (byDate[today] && (!st.snapshots[today] || pac.hour < 11)) {
       const mdl = { ...byDate[today].models };
-      const hrrrDup = !("HRRR" in mdl);   // already stripped by the tripwire above when duplicated
-      st.snapshots[today] = { lockedAt: new Date().toISOString(), models: mdl, hrrrDup };
+      // distinguish the two failure modes: tripwire-stripped duplicate vs never-arrived.
+      // Every day since 07-16 flagged "dup" — but that flag conflated both; now the
+      // snapshot records which, so the next backup tells us if /v1/gfs is even answering.
+      const hrrrWhy = ("HRRR" in mdl) ? "live" : (hrrrJ ? "duplicate-stripped" : ("no-fetch: " + ((payload && payload.hrrrErr) || "unknown")));
+      const hrrrDup = !("HRRR" in mdl);
+      st.snapshots[today] = { lockedAt: new Date().toISOString(), models: mdl, hrrrDup, hrrrWhy };
       saveCouncil(st);
     }
   } catch (e) {}
@@ -1168,9 +1173,13 @@ function saveCalibOverrides() {
 function autoBiasF() {
   try {
     const log = accLogRead();
-    const errs = Object.keys(log).sort().map(d => log[d])
-      .filter(e => e && typeof e.rawMedian === "number" && typeof e.realizedHigh === "number")
-      .map(e => e.rawMedian - e.realizedHigh)
+    const finals = {};
+    try { Object.values((loadCLI().products) || {}).forEach(p => { if (p && p.final && p.date && isFinite(p.max)) finals[p.date] = p.max; }); } catch (e2) {}
+    // settle-verified days only — a partial-day "realized high" once fed a +13.3
+    // phantom error into this window (2026-07-23); provisional captures don't vote
+    const errs = Object.keys(log).sort()
+      .filter(d => finals[d] != null && log[d] && typeof log[d].rawMedian === "number")
+      .map(d => log[d].rawMedian - finals[d])
       .slice(-10);
     if (errs.length < 4) return 0;
     const s = errs.slice().sort((a, b) => a - b);
@@ -7239,8 +7248,22 @@ function logAccuracySnapshot() {
     snappedAt: Date.now(),
   };
   // update realized high (monotonic max through the day)
+  // 2026-07-23: official settle outranks live capture — Jul 22 the app's obs
+  // capture read 93.9 on a day that settled 95 (peak fell in an app-closed gap),
+  // and a partial morning "high" was grading the current day (+13.3 phantom err
+  // feeding auto-bias). Final CLI wins; live capture is provisional only.
+  try {
+    const finals = {};
+    Object.values((loadCLI().products) || {}).forEach(p => { if (p && p.final && p.date && isFinite(p.max)) finals[p.date] = p.max; });
+    Object.keys(log).forEach(dt => {
+      const e = log[dt];
+      if (!e || typeof e !== "object") return;
+      if (finals[dt] != null && e.realizedHigh !== finals[dt]) { e.realizedHigh = finals[dt]; e.rhSrc = "CLI"; }
+    });
+  } catch (e2) {}
   if (realizedHigh != null) {
     rec.realizedHigh = rec.realizedHigh != null ? Math.max(rec.realizedHigh, r1(realizedHigh)) : r1(realizedHigh);
+    rec.rhSrc = rec.rhSrc === "CLI" ? "CLI" : "obs-provisional";
     rec.lastUpdate = Date.now();
   }
   log[today.date] = rec;
