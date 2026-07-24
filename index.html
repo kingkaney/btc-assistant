@@ -417,7 +417,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-23.34";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-23.35";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -3369,6 +3369,89 @@ function tgroupDayMaxFor(date) {
   return { maxF, latestMin, n, peakCovered: peakObs >= 4 };
 }
 
+// =============================================================================
+// HOURLY LADDER — remaining-climb tables from 852 July days (1998-2026),
+// same DNA as the checkpoint: current observation anchors, history supplies the
+// odds, zero forecast inputs. Split-half validated (even vs odd years).
+// Pace conditioning (today's climb-from-7AM vs the climatological median,
+// terciles) survived validation only marginally (+0.6/+1.7% OOS) and its
+// separation collapses after noon — so pace annotates hours ≤12 ONLY, where
+// T2−T0 spread is real; afternoons are hour-only, and the panel says so.
+// Every hourly read snaps once and self-grades against the official settle.
+// =============================================================================
+const LADDER_TABLES = {
+  10: { med7: 5.4, cuts: [-1.8, 1.8], all: {n:850,med:12.6,q25:10.8,q75:15.1,p90:18.0,r1:100,r2:99}, terc: [{n:304,med:11.2,q25:9.0,q75:14.9,p90:18.0,r1:99,r2:97},{n:278,med:12.6,q25:10.1,q75:14.4,p90:18.0,r1:100,r2:99},{n:268,med:14.4,q25:12.6,q75:16.2,p90:18.0,r1:100,r2:100}] },
+  11: { med7: 7.2, cuts: [-1.8, 1.8], all: {n:850,med:10.8,q25:9.0,q75:12.6,p90:14.9,r1:99,r2:97}, terc: [{n:284,med:9.0,q25:7.0,q75:12.6,p90:14.9,r1:98,r2:94},{n:303,med:10.8,q25:9.0,q75:12.6,p90:14.9,r1:99,r2:98},{n:263,med:11.2,q25:9.9,q75:13.0,p90:14.4,r1:100,r2:100}] },
+  12: { med7: 10.1, cuts: [-2.9, 2.0], all: {n:851,med:9.0,q25:6.1,q75:10.8,p90:12.6,r1:98,r2:94}, terc: [{n:289,med:7.6,q25:5.4,q75:10.1,p90:12.6,r1:97,r2:89},{n:280,med:8.1,q25:6.1,q75:9.9,p90:11.9,r1:98,r2:95},{n:282,med:9.0,q25:7.2,q75:10.8,p90:12.6,r1:100,r2:99}] },
+  13: { med7: 12.6, cuts: [-2.7, 1.8], all: {n:850,med:5.9,q25:4.3,q75:7.4,p90:9.0,r1:96,r2:85}, terc: [{n:288,med:5.4,q25:3.6,q75:7.2,p90:10.1,r1:93,r2:72},{n:280,med:5.9,q25:4.9,q75:7.5,p90:9.0,r1:97,r2:90},{n:282,med:6.2,q25:5.4,q75:7.7,p90:9.0,r1:98,r2:93}] },
+  14: { med7: 14.4, cuts: [-2.3, 1.8], all: {n:852,med:4.0,q25:2.9,q75:5.4,p90:7.2,r1:87,r2:60}, terc: [{n:289,med:3.6,q25:2.0,q75:5.4,p90:7.2,r1:80,r2:53},{n:290,med:4.0,q25:3.1,q75:5.4,p90:7.0,r1:88,r2:60},{n:273,med:4.0,q25:3.1,q75:5.4,p90:7.0,r1:93,r2:68}] },
+  15: { med7: 16.0, cuts: [-3.1, 2.0], all: {n:852,med:2.0,q25:1.8,q75:3.6,p90:4.3,r1:64,r2:25}, terc: [{n:287,med:2.0,q25:1.1,q75:3.6,p90:5.0,r1:60,r2:23},{n:284,med:2.5,q25:1.8,q75:3.6,p90:4.3,r1:68,r2:30},{n:281,med:2.0,q25:1.8,q75:3.6,p90:4.1,r1:65,r2:21}] },
+  16: { med7: 17.1, cuts: [-2.7, 2.7], all: {n:850,med:1.1,q25:0.0,q75:1.8,p90:3.6,r1:30,r2:6}, terc: [{n:292,med:1.1,q25:0.0,q75:2.0,p90:3.6,r1:33,r2:9},{n:290,med:1.8,q25:0.0,q75:2.0,p90:3.6,r1:35,r2:6},{n:268,med:1.1,q25:0.0,q75:1.8,p90:2.3,r1:24,r2:3}] },
+};
+
+function ladderSectionHtml(grades, markDirty) {
+  try {
+    const mins = ptMinutesOf(Date.now());
+    const H = Math.floor(mins / 60);
+    let h = `<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px">`;
+    h += `<div style="font-size:10px;letter-spacing:0.6px;color:#7e8ea4;margin-bottom:3px">🪜 HOURLY LADDER · 852 July days · obs + history only</div>`;
+    if (!(H >= 10 && H <= 16)) {
+      h += `<div style="font-size:10px;color:#94a2b4">active 10 AM – 4:59 PM PT — hourly remaining-climb odds from the same archive family as the checkpoint.</div></div>`;
+      return h;
+    }
+    const T = LADDER_TABLES[H];
+    const lane = freshestKseaLane(20);
+    const pts = (lane.pts || []).filter(p => ptDateOf(p.t) === ptDateOf(Date.now()));
+    const nearAnchor = (targetMin) => {
+      let best = null;
+      pts.forEach(p => {
+        const dm = Math.abs(ptMinutesOf(p.t) - targetMin);
+        if (dm <= 35 && (!best || dm < best.dm)) best = { dm, f: p.f };
+      });
+      return best ? best.f : null;
+    };
+    const tH = nearAnchor(H * 60);
+    if (tH == null) {
+      h += `<div style="font-size:10px;color:#94a2b4">waiting for a fresh reading near ${H > 12 ? H - 12 : H}:00 ${H >= 12 ? "PM" : "AM"} to anchor this hour's row.</div></div>`;
+      return h;
+    }
+    // pace (annotates ≤12 only — separation collapses after noon)
+    const t7 = nearAnchor(7 * 60);
+    let cell = T.all, paceNote = "";
+    if (H <= 12) {
+      if (t7 != null) {
+        const res = (tH - t7) - T.med7;
+        const t = res <= T.cuts[0] ? 0 : (res > T.cuts[1] ? 2 : 1);
+        if (T.terc[t]) {
+          cell = T.terc[t];
+          paceNote = ` · pace: <b style="color:${t === 2 ? "#f87171" : t === 0 ? "#60a5fa" : "#94a2b4"}">${["running cold (bottom third)", "typical", "running hot (top third)"][t]}</b>`;
+        }
+      } else paceNote = ` · pace n/a (no 7 AM anchor in the lane)`;
+    }
+    const proj = tH + cell.med;
+    h += `<div style="font-size:11px;line-height:1.6;color:#cdd9e8">${H > 12 ? H - 12 : H}${H >= 12 ? " PM" : " AM"} anchor <b>${tH.toFixed(1)}°</b>${paceNote}<br>`
+      + `typically adds <b style="color:#fcd34d">+${cell.med.toFixed(1)}°</b> more <span style="color:#7e8ea4">[+${cell.q25.toFixed(1)} to +${cell.q75.toFixed(1)}, p90 +${cell.p90.toFixed(1)}]</span> → projected high ≈ <b style="color:#fcd34d">${proj.toFixed(1)}°</b><br>`
+      + `<b style="color:#34d399">${cell.r1}%</b> of days add ≥1 rung (+1.8°) from here · <b style="color:${cell.r2 >= 50 ? "#34d399" : "#fbbf24"}">${cell.r2}%</b> add ≥2 (+3.6°) <span style="color:#7e8ea4">(n=${cell.n})</span></div>`;
+    if (H > 12) h += `<div style="font-size:9px;color:#56657a">pace conditioning matters before noon only — by afternoon the terciles converge, so this row is hour-only by design.</div>`;
+    // snap once per date|hour, grade later vs official settle
+    try {
+      grades.ladder = grades.ladder || {};
+      const key = ptDateOf(Date.now()) + "|" + H;
+      if (!grades.ladder[key]) {
+        grades.ladder[key] = { date: ptDateOf(Date.now()), H, tF: +tH.toFixed(1), proj: +proj.toFixed(1), at: Date.now() };
+        if (markDirty) markDirty();
+      }
+    } catch (e) {}
+    const graded = Object.values(grades.ladder || {}).filter(e => e.graded);
+    if (graded.length) {
+      const mae = graded.reduce((a, e) => a + Math.abs(e.proj - e.settle), 0) / graded.length;
+      h += `<div style="font-size:9.5px;color:#7e8ea4;margin-top:3px">ladder self-grade: projection MAE ${mae.toFixed(1)}° over ${graded.length} hourly reads</div>`;
+    }
+    h += `</div>`;
+    return h;
+  } catch (e) { return ""; }
+}
+
 function resolveSettleFor(date, today) {
   const so = officialSettleFor(date);
   const ageD = (Date.parse(today) - Date.parse(date)) / 86400000;
@@ -3437,6 +3520,18 @@ function gradeCheckpointSnaps() {
       e.graded = true; e.settle = r.settle; e.src = r.src;
       if (!e.locked) e.hit = (e.pick === r.settle);
       changed = true;
+    });
+  } catch (err) {}
+  // ladder snaps grade against the same settle rules as everything else
+  try {
+    Object.values(g.ladder || {}).forEach(e => {
+      if (e.graded || e.skipped || e.date >= today) return;
+      const r = resolveSettleFor(e.date, today);
+      if (!r) {
+        if ((Date.parse(today) - Date.parse(e.date)) / 86400000 > 15) { e.skipped = true; changed = true; }
+        return;
+      }
+      e.graded = true; e.settle = r.settle; e.src = r.src; changed = true;
     });
   } catch (err) {}
   if (changed) saveCkptGrades(g);
@@ -3562,6 +3657,7 @@ function renderCheckpoint() {
       }
     }
   } catch (err) {}
+  html += ladderSectionHtml(grades, () => { froze = true; });
   if (froze) saveCkptGrades(grades);
   html += ckptGradeSummaryHtml(grades);
   html += `<div style="font-size:9px;color:#56657a;margin-top:4px">split-half validated (even vs odd years) on 776 July days, 2001–2026 · anchor = T-group ob nearest the hour, frozen at first read · greyed cells flipped between halves — don't lean on them</div>`;
