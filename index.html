@@ -417,7 +417,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-23.33";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-23.34";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -3135,20 +3135,69 @@ function renderLeadStn() {
     S["solar-collapse"] = "19–26% vs base 10–11% (~2.2x) — clouds arriving SW · size: median = climb STALLS; 1-in-4 falls ≥1.8°, 1-in-4 climbs anyway";
     return S[kind] || "";
   };
+  // Plain-English layer (2026-07-23): the stats above are the receipts; the
+  // sentence people act on is written out below, with real target temperatures
+  // computed from KSEA's level at fire time. Rung = 1.8°F, the lane's step size.
+  const KIND_NAME = { "D1735-temp": "SW warm", "D1735-cool": "SW cool", "east-pair": "East warm", "east-cool": "East cool", "solar-break": "Sun break", "solar-collapse": "Cloud arrival" };
+  const heraldPlain = (e, hrOpt) => {
+    const hr = (hrOpt != null) ? hrOpt : Math.floor(ptMinutesOf(Date.now()) / 60);
+    const aft = hr >= 15 && hr < 19;
+    const k = e.kAt, up1 = (k + 1.8).toFixed(1), up2 = (k + 3.6).toFixed(1), dn1 = (k - 1.8).toFixed(1), dn2 = (k - 3.6).toFixed(1);
+    switch (e.kind) {
+      case "D1735-temp": return aft
+        ? `KSEA was ${k}° when this fired — about half the time it climbs to ~${up1}° within the hour (double the usual afternoon odds).`
+        : `KSEA was ${k}° when this fired — it usually climbs to about ${up1}° within the hour, sometimes ${up2}° (roughly 9 times in 10).`;
+      case "east-pair": return aft
+        ? `KSEA was ${k}° — about 4 times in 10 it climbs to ~${up1}° within the hour (double the usual afternoon odds).`
+        : `KSEA was ${k}° — it usually climbs to about ${up1}° within the hour, sometimes ${up2}° (about 17 in 20).`;
+      case "solar-break": return `Sun just broke through 1.7 mi SW — KSEA (${k}°) typically rises to ~${up1}° within 30 minutes (about 3 in 4).`;
+      case "D1735-cool": return aft
+        ? `KSEA was ${k}° — it usually falls to about ${dn1}° within the hour, the worst quarter reach ${dn2}° (about 2 in 3 — flatten-warning).`
+        : `KSEA was ${k}° — most often the climb just stops here; about 1 day in 3 it falls toward ${dn1}° (normally only 1 in 10 do).`;
+      case "east-cool": return aft
+        ? `KSEA was ${k}° — falls to about ${dn1}° within the hour roughly 2 times in 3; a quarter reach ${dn2}°.`
+        : `KSEA was ${k}° — usually holds, but about 1 in 3 fall toward ${dn1}° (vs 1 in 10 normally).`;
+      case "solar-collapse": return `Clouds just arrived 1.7 mi SW — KSEA's climb (at ${k}°) usually STALLS here; about 1 in 4 fall toward ${dn1}°, 1 in 4 keep climbing.`;
+    }
+    return "";
+  };
   if (recent.length) {
     recent.slice(-2).forEach(e => {
       const cool = e.sign === -1;
-      h += `<div style="margin-bottom:6px;padding:6px 9px;background:${cool ? "rgba(96,165,250,0.10)" : "rgba(52,211,153,0.09)"};border-left:2px solid ${cool ? "#60a5fa" : "#34d399"};border-radius:4px;font-size:11px;line-height:1.55;color:${cool ? "#dbeafe" : "#d9fbe9"}"><b>${cool ? "🧊" : "⚡"} ${e.kind}</b> fired ${Math.round((Date.now() - e.t) / 60000)}m ago (${e.detail}) → ${cool ? "<b>flatten-warning</b> — " : "KSEA step likely: "}<b>${heraldStats(e.kind)}</b></div>`;
+      h += `<div style="margin-bottom:6px;padding:7px 10px;background:${cool ? "rgba(96,165,250,0.10)" : "rgba(52,211,153,0.09)"};border-left:2px solid ${cool ? "#60a5fa" : "#34d399"};border-radius:4px;font-size:11.5px;line-height:1.6;color:${cool ? "#dbeafe" : "#d9fbe9"}">
+        <b>${cool ? "🧊" : "⚡"} ${KIND_NAME[e.kind] || e.kind} signal</b> <span style="color:#7e8ea4">· ${Math.round((Date.now() - e.t) / 60000)}m ago · ${e.detail}</span><br>
+        <b>${heraldPlain(e)}</b>
+        <div style="margin-top:3px;font-size:9px;color:#7e8ea4">${heraldStats(e.kind)}</div></div>`;
     });
   }
   const rows = [["D1735", s.stations && s.stations.D1735], ["G3137", s.stations && s.stations.G3137], ["C2224", s.stations && s.stations.C2224]];
+  let anyFresh = false;
+  const ages = [];
   rows.forEach(([sid, pts]) => {
     const r = d30(pts);
     const last = pts && pts.length ? pts[pts.length - 1] : null;
     const age = last ? Math.round((Date.now() - last.t) / 60000) : null;
+    if (age != null) ages.push(age);
+    if (r) anyFresh = true;
     const sol = (sid === "D1735" && last && isFinite(last.sol)) ? ` · ☀ ${Math.round(last.sol)} W/m²` : "";
-    h += `<div style="font-size:11px;color:#cdd9e8;padding:2px 0"><b>${sid}</b> ${last ? `${last.f.toFixed(1)}° <span style="color:#93c5fd">${fToC1(last.f)}°C</span>` : "—"} ${r ? `· Δ30m <b style="color:${r.dF >= 1.0 ? "#34d399" : r.dF <= -1.0 ? "#60a5fa" : "#94a2b4"}">${r.dF > 0 ? "+" : ""}${r.dF}°</b>` : ""}${sol} <span style="color:#7e8ea4">${age != null ? `· ${age}m` : "· no data"}</span></div>`;
+    let trend;
+    if (r) {
+      const d = r.dF;
+      trend = d >= 1.2 ? `<b style="color:#34d399">rising fast — +${d}° in 30 min</b>`
+        : d >= 0.4 ? `<span style="color:#a7f3d0">rising +${d}° in 30 min</span>`
+        : d <= -1.2 ? `<b style="color:#60a5fa">falling fast — ${d}° in 30 min</b>`
+        : d <= -0.4 ? `<span style="color:#93c5fd">falling ${d}° in 30 min</span>`
+        : `<span style="color:#94a2b4">steady</span>`;
+    } else {
+      trend = `<span style="color:#fbbf24">no trend read — last report ${age != null ? age + "m" : "?"} old</span>`;
+    }
+    h += `<div style="font-size:11px;color:#cdd9e8;padding:2px 0"><b>${sid}</b> ${last ? `${last.f.toFixed(1)}° <span style="color:#93c5fd">${fToC1(last.f)}°C</span>` : "—"} · ${trend}${sol}</div>`;
   });
+  if (!recent.length) {
+    h += anyFresh
+      ? `<div style="margin-top:4px;font-size:10.5px;color:#94a2b4">Quiet — no signals right now. A sharp 30-minute jump or drop at these stations usually shows up at KSEA within the hour; this line will spell out the expected move when one fires.</div>`
+      : `<div style="margin-top:4px;font-size:10.5px;color:#fbbf24">⏸ Station reports are ${ages.length ? Math.min(...ages) + "–" + Math.max(...ages) + "m" : ""} old — trends are unreadable until fresh reports arrive (these hobby stations report irregularly). No signal can fire from stale data.</div>`;
+  }
   const graded = log.filter(e => e.graded && !e.skipped);
   if (graded.length) {
     const hits = graded.filter(e => e.hit).length;
@@ -3159,7 +3208,7 @@ function renderLeadStn() {
     graded.forEach(e => { (byKind[e.kind] = byKind[e.kind] || [0, 0])[1]++; if (e.hit) byKind[e.kind][0]++; });
     const kinds = Object.keys(byKind).sort().map(k => {
       const [kh, kn] = byKind[k];
-      return `${k} <b style="color:${kh / kn >= 0.6 ? "#34d399" : kh / kn >= 0.3 ? "#fbbf24" : "#f87171"}">${kh}/${kn}</b>`;
+      return `${KIND_NAME[k] || k} <b style="color:${kh / kn >= 0.6 ? "#34d399" : kh / kn >= 0.3 ? "#fbbf24" : "#f87171"}">${kh}/${kn}</b>`;
     }).join(" · ");
     h += `<div style="margin-top:5px;font-size:10px;color:#cdd9e8">live record: <b style="color:${hits / graded.length >= 0.7 ? "#34d399" : "#fbbf24"}">${hits}/${graded.length}</b> overall · ${kinds}</div>`;
   }
