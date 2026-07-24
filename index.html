@@ -417,7 +417,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-23.35";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-23.37";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -3370,16 +3370,22 @@ function tgroupDayMaxFor(date) {
 }
 
 // =============================================================================
-// HOURLY LADDER — remaining-climb tables from 852 July days (1998-2026),
+// HOURLY LADDER (8 AM – 4 PM) — remaining-climb tables from 852 July days (1998-2026),
 // same DNA as the checkpoint: current observation anchors, history supplies the
 // odds, zero forecast inputs. Split-half validated (even vs odd years).
 // Pace conditioning (today's climb-from-7AM vs the climatological median,
-// terciles) survived validation only marginally (+0.6/+1.7% OOS) and its
+// terciles) validates at +2.0/+3.2% OOS with the 8-9 AM rows included — early
+// hours are where it separates MOST (8 AM: slow-start +14.8 vs hot-start +18.9,
+// a 4.1° spread; a fast 7-to-8 climb is a clear-sky tell) — and its
 // separation collapses after noon — so pace annotates hours ≤12 ONLY, where
 // T2−T0 spread is real; afternoons are hour-only, and the panel says so.
 // Every hourly read snaps once and self-grades against the official settle.
 // =============================================================================
 const LADDER_TABLES = {
+  6: { med7: 0, cuts: [0, 0], all: {n:852,med:19.8,q25:14.4,q75:23.9,p90:27.0,r1:100,r2:100}, terc: [null,null,null] },
+  7: { med7: 0, cuts: [0, 0], all: {n:852,med:18.7,q25:14.4,q75:22.0,p90:25.2,r1:100,r2:100}, terc: [null,null,null] },
+  8: { med7: 1.8, cuts: [-0.9, 0.2], all: {n:846,med:16.9,q25:13.0,q75:20.0,p90:22.8,r1:100,r2:100}, terc: [{n:304,med:14.8,q25:11.0,q75:19.8,p90:22.0,r1:100,r2:99},{n:276,med:16.3,q25:13.0,q75:19.8,p90:22.0,r1:100,r2:99},{n:266,med:18.9,q25:16.2,q75:21.1,p90:23.0,r1:100,r2:100}] },
+  9: { med7: 3.6, cuts: [-1.6, 1.4], all: {n:849,med:14.8,q25:12.1,q75:18.0,p90:19.8,r1:100,r2:99}, terc: [{n:303,med:13.0,q25:10.1,q75:16.2,p90:19.8,r1:100,r2:99},{n:267,med:14.4,q25:11.2,q75:17.1,p90:19.8,r1:100,r2:100},{n:279,med:16.2,q25:14.4,q75:18.0,p90:20.0,r1:100,r2:100}] },
   10: { med7: 5.4, cuts: [-1.8, 1.8], all: {n:850,med:12.6,q25:10.8,q75:15.1,p90:18.0,r1:100,r2:99}, terc: [{n:304,med:11.2,q25:9.0,q75:14.9,p90:18.0,r1:99,r2:97},{n:278,med:12.6,q25:10.1,q75:14.4,p90:18.0,r1:100,r2:99},{n:268,med:14.4,q25:12.6,q75:16.2,p90:18.0,r1:100,r2:100}] },
   11: { med7: 7.2, cuts: [-1.8, 1.8], all: {n:850,med:10.8,q25:9.0,q75:12.6,p90:14.9,r1:99,r2:97}, terc: [{n:284,med:9.0,q25:7.0,q75:12.6,p90:14.9,r1:98,r2:94},{n:303,med:10.8,q25:9.0,q75:12.6,p90:14.9,r1:99,r2:98},{n:263,med:11.2,q25:9.9,q75:13.0,p90:14.4,r1:100,r2:100}] },
   12: { med7: 10.1, cuts: [-2.9, 2.0], all: {n:851,med:9.0,q25:6.1,q75:10.8,p90:12.6,r1:98,r2:94}, terc: [{n:289,med:7.6,q25:5.4,q75:10.1,p90:12.6,r1:97,r2:89},{n:280,med:8.1,q25:6.1,q75:9.9,p90:11.9,r1:98,r2:95},{n:282,med:9.0,q25:7.2,q75:10.8,p90:12.6,r1:100,r2:99}] },
@@ -3395,8 +3401,8 @@ function ladderSectionHtml(grades, markDirty) {
     const H = Math.floor(mins / 60);
     let h = `<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px">`;
     h += `<div style="font-size:10px;letter-spacing:0.6px;color:#7e8ea4;margin-bottom:3px">🪜 HOURLY LADDER · 852 July days · obs + history only</div>`;
-    if (!(H >= 10 && H <= 16)) {
-      h += `<div style="font-size:10px;color:#94a2b4">active 10 AM – 4:59 PM PT — hourly remaining-climb odds from the same archive family as the checkpoint.</div></div>`;
+    if (!(H >= 6 && H <= 16)) {
+      h += `<div style="font-size:10px;color:#94a2b4">active 6 AM – 4:59 PM PT — hourly remaining-climb odds from the same archive family as the checkpoint.</div></div>`;
       return h;
     }
     const T = LADDER_TABLES[H];
@@ -3418,7 +3424,7 @@ function ladderSectionHtml(grades, markDirty) {
     // pace (annotates ≤12 only — separation collapses after noon)
     const t7 = nearAnchor(7 * 60);
     let cell = T.all, paceNote = "";
-    if (H <= 12) {
+    if (H >= 8 && H <= 12) {
       if (t7 != null) {
         const res = (tH - t7) - T.med7;
         const t = res <= T.cuts[0] ? 0 : (res > T.cuts[1] ? 2 : 1);
@@ -3433,6 +3439,7 @@ function ladderSectionHtml(grades, markDirty) {
       + `typically adds <b style="color:#fcd34d">+${cell.med.toFixed(1)}°</b> more <span style="color:#7e8ea4">[+${cell.q25.toFixed(1)} to +${cell.q75.toFixed(1)}, p90 +${cell.p90.toFixed(1)}]</span> → projected high ≈ <b style="color:#fcd34d">${proj.toFixed(1)}°</b><br>`
       + `<b style="color:#34d399">${cell.r1}%</b> of days add ≥1 rung (+1.8°) from here · <b style="color:${cell.r2 >= 50 ? "#34d399" : "#fbbf24"}">${cell.r2}%</b> add ≥2 (+3.6°) <span style="color:#7e8ea4">(n=${cell.n})</span></div>`;
     if (H > 12) h += `<div style="font-size:9px;color:#56657a">pace conditioning matters before noon only — by afternoon the terciles converge, so this row is hour-only by design.</div>`;
+    if (H <= 7) h += `<div style="font-size:9px;color:#56657a">pre-8 AM rows are hour-only: overnight-level conditioning was tested (warm mornings looked like bigger climbs) but flipped between validation halves — raw odds only this early.</div>`;
     // snap once per date|hour, grade later vs official settle
     try {
       grades.ladder = grades.ladder || {};
