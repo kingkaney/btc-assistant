@@ -417,7 +417,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-23.37";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-24.40";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -1155,8 +1155,21 @@ function loadCalibOverrides() {
         CALIB.enabled = true;
         try { localStorage.setItem("ksea_calib_v1", JSON.stringify({ ...o, enabled: true, autoBias0715: true })); } catch (e3) {}
       }
+      // 2026-07-24: re-enable ONCE more. The user turned calibration off while its
+      // ground truth was dirty; b2026-07-23.33 made auto-bias settle-verified-only,
+      // and the last four verified days ran +0.9 to +2.6 hot — exactly what this
+      // subtracts. After this flip the tap-toggle on the calib note is respected.
+      if (!o.autoBias0724) {
+        CALIB.enabled = true;
+        try { localStorage.setItem("ksea_calib_v1", JSON.stringify({ ...JSON.parse(localStorage.getItem("ksea_calib_v1") || "{}"), enabled: true, autoBias0724: true })); } catch (e4) {}
+      }
     }
   } catch (e) {}
+}
+function toggleAutoBias() {
+  CALIB.enabled = !CALIB.enabled;
+  saveCalibOverrides();
+  try { renderProjection(); } catch (e) {}
 }
 function saveCalibOverrides() {
   try {
@@ -1634,15 +1647,18 @@ function renderProjection() {
     if (proj.calibrated && proj.calInfo) {
       const ci = proj.calInfo;
       const leadTxt = ci.lead === 0 ? "today" : ci.lead === 1 ? "tomorrow" : `+${ci.lead}d`;
-      calibNoteEl.innerHTML = `<span style="color:#9ca3af">calibrated</span> · raw ${proj.rawMedian.toFixed(1)}° → <b>${median.toFixed(1)}°</b> (−${ci.biasF.toFixed(1)} bias) · spread ±${(ci.targetStd*1.2816).toFixed(1)}° (${ci.season}, ${leadTxt})`;
+      calibNoteEl.innerHTML = `<span style="color:#9ca3af">auto-bias ON</span> · raw ${proj.rawMedian.toFixed(1)}° → <b>${median.toFixed(1)}°</b> (−${ci.biasF.toFixed(1)}° bias, settle-verified) · spread ±${(ci.targetStd*1.2816).toFixed(1)}° (${ci.season}, ${leadTxt}) · <span style="color:#60a5fa">tap to turn off</span>`;
     } else {
-      calibNoteEl.innerHTML = `<span style="color:#9ca3af">calibration off</span> · showing raw model output`;
+      calibNoteEl.innerHTML = `<span style="color:#fbbf24">calibration OFF — raw has run hot on recent verified days</span> · <span style="color:#60a5fa">tap to enable auto-bias (−${autoBiasF().toFixed(1)}° today)</span>`;
     }
+    calibNoteEl.style.cursor = "pointer";
+    calibNoteEl.onclick = toggleAutoBias;
   }
 
   // Current temp vs. projection ticker (Today only)
   const currentTickerEl = document.getElementById("current-ticker");
   const isToday = state.days.length && day.date === state.days[0].date;
+  if (isToday) { try { state.lastProjSnap = { raw: +proj.rawMedian.toFixed(1), shown: +median.toFixed(1), at: Date.now() }; } catch (e) {} }
   if (currentTickerEl) {
     if (isToday && state.current && state.current.tempF != null) {
       const currentF = state.current.tempF;
@@ -3395,6 +3411,91 @@ const LADDER_TABLES = {
   16: { med7: 17.1, cuts: [-2.7, 2.7], all: {n:850,med:1.1,q25:0.0,q75:1.8,p90:3.6,r1:30,r2:6}, terc: [{n:292,med:1.1,q25:0.0,q75:2.0,p90:3.6,r1:33,r2:9},{n:290,med:1.8,q25:0.0,q75:2.0,p90:3.6,r1:35,r2:6},{n:268,med:1.1,q25:0.0,q75:1.8,p90:2.3,r1:24,r2:3}] },
 };
 
+// CONSENSUS LINE (2026-07-24): settle ~ b0 + b1*anchor(H) + b2*pace(7→H) + b3*prevDayMax,
+// OLS fit on 813 July days 1998-2026 (both archives merged, °F). Validation: parity
+// split-half BEAT shipped ladder at every hour; era split (fit 1998-2012 → test
+// 2013-2026 AND reverse) BEAT at every hour; recent-regime-only (2015-2026) BEAT
+// 7-11, noon failed one half by 0.2° → noon flagged thin. 7 AM has no pace term.
+// Dew-spread was untestable (no dew column in either archive) — not refuted, unknowable.
+// LOYO audit (2026-07-24, every day called by a model that never saw its year):
+// bias 0.00 at every hour; shipped [p10,p90] covers 79-80% OOS (quantiles match ≤0.1°,
+// no recalibration needed). Conditional lean is real and middle-seeking: 9 AM call ran
+// +2.2° hot on days ending <75, ~2° cold on days ending ≥85 — but that HALVES the plain
+// ladder's hot-day undershoot (-4.6 mean on ≥90 days). Regime freaks remain the blend's job.
+const CONSENSUS_TABLES = {
+  7:  { b: [-3.218, 0.911, null, 0.348], p10: -5.9, p90: 6.6, r1: 26, r2: 51, n: 813 },
+  8:  { b: [2.793, 0.814, 0.803, 0.309], p10: -5.0, p90: 5.6, r1: 33, r2: 62, n: 813 },
+  9:  { b: [7.990, 0.710, 0.685, 0.292], p10: -4.3, p90: 5.1, r1: 39, r2: 69, n: 813 },
+  10: { b: [9.831, 0.674, 0.549, 0.273], p10: -4.3, p90: 4.3, r1: 43, r2: 71, n: 813 },
+  11: { b: [9.638, 0.683, 0.496, 0.239], p10: -3.9, p90: 3.9, r1: 47, r2: 77, n: 813 },
+  12: { b: [8.725, 0.703, 0.370, 0.215], p10: -3.4, p90: 3.3, r1: 54, r2: 82, n: 813, thin: true },
+};
+
+function consensusSectionHtml(grades, markDirty) {
+  try {
+    const mins = ptMinutesOf(Date.now());
+    const H = Math.floor(mins / 60);
+    let h = `<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px">`;
+    h += `<div style="font-size:10px;letter-spacing:0.6px;color:#7e8ea4;margin-bottom:3px">🎯 CONSENSUS LINE · 813 July days · era-transfer verified</div>`;
+    if (!(H >= 7 && H <= 12)) {
+      h += `<div style="font-size:10px;color:#94a2b4">active 7 AM – 12:59 PM PT — fuses this hour's reading, the morning pace, and yesterday's settle into one fitted number. After noon the anchor knows most of the answer; lean on the ladder and duration read.</div></div>`;
+      return h;
+    }
+    const T = CONSENSUS_TABLES[H];
+    const today = ptDateOf(Date.now());
+    const yday = new Date(Date.parse(today) - 86400000).toISOString().slice(0, 10);
+    const ys = resolveSettleFor(yday, today);
+    const lane = freshestKseaLane(20);
+    const pts = (lane.pts || []).filter(p => ptDateOf(p.t) === today);
+    const nearAnchor = (targetMin) => {
+      let best = null;
+      pts.forEach(p => {
+        const dm = Math.abs(ptMinutesOf(p.t) - targetMin);
+        if (dm <= 35 && (!best || dm < best.dm)) best = { dm, f: p.f };
+      });
+      return best ? best.f : null;
+    };
+    const tH = nearAnchor(H * 60);
+    const t7 = H > 7 ? nearAnchor(7 * 60) : null;
+    // all three regressors must be REAL — no invented inputs
+    if (ys == null) { h += `<div style="font-size:10px;color:#94a2b4">needs yesterday's verified settle (CLI or covered T-group max) — not resolvable yet, so no fused number rather than a fake one.</div></div>`; return h; }
+    if (tH == null) { h += `<div style="font-size:10px;color:#94a2b4">waiting for a fresh reading near ${H > 12 ? H - 12 : H}:00 to anchor.</div></div>`; return h; }
+    if (H > 7 && t7 == null) { h += `<div style="font-size:10px;color:#94a2b4">no 7 AM anchor in the lane — the fitted pace term can't run, so no fused number this hour.</div></div>`; return h; }
+    const pace = H > 7 ? (tH - t7) : 0;
+    const est = T.b[0] + T.b[1] * tH + (T.b[2] != null ? T.b[2] * pace : 0) + T.b[3] * ys.settle;
+    const lo = est + T.p10, hi = est + T.p90;
+    const blend = (state.lastProjSnap && (Date.now() - state.lastProjSnap.at) < 3600000) ? state.lastProjSnap.shown : null;
+    h += `<div style="font-size:11px;line-height:1.6;color:#cdd9e8">${H > 12 ? H - 12 : H}${H >= 12 ? " PM" : " AM"} fused call: <b style="color:#a78bfa;font-size:13px">${est.toFixed(1)}°</b> <span style="color:#7e8ea4">[${lo.toFixed(1)} – ${hi.toFixed(1)}, 10-90%]</span><br>`
+      + `<span style="color:#7e8ea4">from</span> anchor ${tH.toFixed(1)}°${H > 7 ? ` · climb since 7 AM ${pace >= 0 ? "+" : ""}${pace.toFixed(1)}°` : ""} · yesterday settled ${ys.settle}° <span style="color:#56657a">(${ys.src})</span><br>`
+      + `lands within 1 rung <b style="color:#34d399">${T.r1}%</b> of days from here, within 2 <b style="color:#34d399">${T.r2}%</b>`
+      + (blend != null ? ` · <span style="color:#7e8ea4">blend says <b style="color:#cdd9e8">${blend.toFixed(1)}°</b> — logged side-by-side, not fused</span>` : "") + `</div>`;
+    if (T.thin) h += `<div style="font-size:9px;color:#56657a">noon note: edge over the plain ladder thinned to noise-range in the 2015-2026-only check — treat this hour's fusion as a tiebreaker, not gospel.</div>`;
+    h += `<div style="font-size:9px;color:#56657a">reads the middle by design: audited ~2° cold on days that ended ≥85 and ~2° hot on days that ended <75 (still half the ladder's hot-day miss). On a clearing day with the flip flag up and the blend well above this number, the blend side is the live tail.</div>`;
+    // snap once per date|hour; blend rides along for the live weight audition
+    try {
+      grades.consensus = grades.consensus || {};
+      const key = today + "|" + H;
+      if (!grades.consensus[key]) {
+        grades.consensus[key] = { date: today, H, anchor: +tH.toFixed(1), pace: +pace.toFixed(1), prev: ys.settle, est: +est.toFixed(1), blend: blend != null ? +blend.toFixed(1) : null, at: Date.now() };
+        if (markDirty) markDirty();
+      }
+    } catch (e) {}
+    const graded = Object.values(grades.consensus || {}).filter(e => e.graded);
+    if (graded.length) {
+      const cm = graded.reduce((a, e) => a + Math.abs(e.est - e.settle), 0) / graded.length;
+      const paired = graded.filter(e => e.blend != null);
+      let vs = "";
+      if (paired.length) {
+        const bm = paired.reduce((a, e) => a + Math.abs(e.blend - e.settle), 0) / paired.length;
+        vs = ` · vs blend ${bm.toFixed(1)}° on ${paired.length} paired`;
+      }
+      h += `<div style="font-size:9.5px;color:#7e8ea4;margin-top:3px">live ledger: consensus MAE ${cm.toFixed(1)}° over ${graded.length} graded snaps${vs} — a fitted fusion weight unlocks at ~15 paired days per hour, earned not assumed</div>`;
+    }
+    h += `</div>`;
+    return h;
+  } catch (e) { return ""; }
+}
+
 function ladderSectionHtml(grades, markDirty) {
   try {
     const mins = ptMinutesOf(Date.now());
@@ -3527,6 +3628,18 @@ function gradeCheckpointSnaps() {
       e.graded = true; e.settle = r.settle; e.src = r.src;
       if (!e.locked) e.hit = (e.pick === r.settle);
       changed = true;
+    });
+  } catch (err) {}
+  // consensus snaps grade against the same settle rules as everything else
+  try {
+    Object.values(g.consensus || {}).forEach(e => {
+      if (e.graded || e.skipped || e.date >= today) return;
+      const r = resolveSettleFor(e.date, today);
+      if (!r) {
+        if ((Date.parse(today) - Date.parse(e.date)) / 86400000 > 15) { e.skipped = true; changed = true; }
+        return;
+      }
+      e.graded = true; e.settle = r.settle; e.src = r.src; changed = true;
     });
   } catch (err) {}
   // ladder snaps grade against the same settle rules as everything else
@@ -3664,6 +3777,7 @@ function renderCheckpoint() {
       }
     }
   } catch (err) {}
+  html += consensusSectionHtml(grades, () => { froze = true; });
   html += ladderSectionHtml(grades, () => { froze = true; });
   if (froze) saveCkptGrades(grades);
   html += ckptGradeSummaryHtml(grades);
