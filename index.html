@@ -195,6 +195,7 @@
 <div class="panel" id="sixhr-panel">
   <div class="panel-head"><span>📊 6-Hour Max</span><span class="accent" id="sixhr-status">—</span></div>
   <div class="panel-body" id="sixhr-body"><div style="font-size:11px;color:#94a2b4">waiting for the synoptic 6-hour max report…</div></div>
+  <div class="panel-body" id="dsm-body" style="border-top:1px solid rgba(255,255,255,0.08)"><div style="font-size:11px;color:#94a2b4">first DSM check pending…</div></div>
 </div>
 
   <div class="panel-body" id="insight-body"><div style="font-size:11px;color:#94a2b4">computing ceiling, divergence, reliability…</div></div>
@@ -417,7 +418,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-24.40";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-30.42";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -2562,6 +2563,211 @@ async function fetchCLI(force) {
 }
 
 // Match locked calls against final officials.
+// =============================================================================
+// ASOS Daily Summary Message (DSMSEA): the station's own midnight ledger for the
+// completed climate day — max/min with OFFICIAL times of occurrence — plus
+// occasional intraday intermediates. Same api.weather.gov product rail as CLI
+// (CORS-proven from this app). ASOS clocks run LST (PST year-round, no DST),
+// so times are converted for display. CLI remains the settlement payer; the
+// DSM is early confirmation + the official time-of-max.
+// =============================================================================
+const DSM_KEY = "ksea_dsm_v1";
+function loadDSM() { try { return JSON.parse(localStorage.getItem(DSM_KEY) || "{}"); } catch (e) { return {}; } }
+function saveDSM(o) { try { localStorage.setItem(DSM_KEY, JSON.stringify(o)); } catch (e) {} }
+
+// US DST: 2nd Sunday of March through 1st Sunday of November (display conversion only).
+function dstOffsetMin(iso) {
+  try {
+    const [y, m, d] = iso.split("-").map(Number);
+    const nthSun = (yy, mm, n) => { const first = new Date(Date.UTC(yy, mm - 1, 1)).getUTCDay(); return 1 + ((7 - first) % 7) + (n - 1) * 7; };
+    const t = m * 100 + d;
+    const start = 3 * 100 + nthSun(y, 3, 2), end = 11 * 100 + nthSun(y, 11, 1);
+    return (t >= start && t < end) ? 60 : 0;
+  } catch (e) { return 60; }
+}
+function lstToPT(hhmm, iso) {
+  const mins = Math.floor(hhmm / 100) * 60 + (hhmm % 100) + dstOffsetMin(iso);
+  const m24 = ((mins % 1440) + 1440) % 1440;
+  const h = Math.floor(m24 / 60), mm = m24 % 60, h12 = ((h + 11) % 12) + 1;
+  return `${h12}:${String(mm).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+}
+
+// Parse one DSM product -> { date, type, asOf, max, maxLST, min, minLST } or { skip:true }.
+// Grammar per ASOS spec + live samples: `KSEA DS [HHMM] DD/MM maxTTThhmm/ minTTThhmm// dayMax/ nightMin//…`
+// HHMM present = intraday intermediate; absent = the midnight FINAL. "M" = missing.
+function parseDSMText(text, issuedISO) {
+  if (!text) return { skip: true };
+  const m = text.match(/(?:^|\n)\s*KSEA\s+DS\s+([^=]+)/);
+  if (!m) return { skip: true };
+  const toks = m[1].replace(/\s+/g, " ").trim().split(" ");
+  let i = 0, asOf = null;
+  if (/^\d{4}$/.test(toks[0]) && !toks[0].includes("/")) { asOf = +toks[0]; i = 1; }
+  const dm = (toks[i] || "").match(/^(\d{1,2})\/(\d{1,2})$/);
+  if (!dm) return { skip: true };
+  const dd = +dm[1], mo = +dm[2];
+  if (!(dd >= 1 && dd <= 31 && mo >= 1 && mo <= 12)) return { skip: true };
+  let yr = issuedISO ? +issuedISO.slice(0, 4) : new Date().getUTCFullYear();
+  const issMo = issuedISO ? +issuedISO.slice(5, 7) : mo;
+  if (mo === 12 && issMo === 1) yr -= 1;
+  const date = `${yr}-${String(mo).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+  const fields = toks.slice(i + 1).join("").split("/");
+  const grp = (s) => {
+    if (!s || s === "M") return null;
+    const g = s.match(/^(-?\d{1,3})(\d{4})$/);
+    if (!g) return null;
+    const t = +g[1], hm = +g[2];
+    if (!(t > -30 && t < 130) || hm % 100 > 59 || Math.floor(hm / 100) > 23) return null;
+    return { t, hm };
+  };
+  const mx = grp(fields[0]), mn = grp(fields[1]);
+  return {
+    date, type: asOf != null ? "INTERM" : "FINAL", asOf,
+    max: mx ? mx.t : null, maxLST: mx ? mx.hm : null,
+    min: mn ? mn.t : null, minLST: mn ? mn.hm : null,
+    issued: issuedISO || null, skip: mx == null && mn == null && asOf == null && false,
+  };
+}
+
+// Primary rail (user-directed): IEM AFOS archive page for DSMSEA. The page is
+// HTML; we extract three verified anchors: the "Product Timestamp: ... UTC"
+// line, the canonical product id from the /api/1/nwstext/{pid} download link,
+// and the raw "KSEA DS ...=" product text. Only shows the LATEST product, so
+// the NWS product rail runs as a slow backfill to fill gaps from closed-app
+// windows. Both feed one cache; FINAL beats INTERM per date.
+const DSM_IEM_URL = "https://mesonet.agron.iastate.edu/wx/afos/p.php?pil=DSMSEA";
+
+function parseDsmPage(html) {
+  if (!html) return null;
+  const pid = (html.match(/api\/1\/nwstext\/(\d{12}-K\w{3}-\w+-DSMSEA[\w-]*)/) || [])[1] || null;
+  const ts = (html.match(/Product Timestamp:[^\d]*(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/) || []);
+  const issued = ts[1] ? `${ts[1]}T${ts[2]}:00+00:00` : null;
+  const txt = (html.match(/KSEA\s+DS\s[^=<]{4,300}/) || [])[0] || null;
+  if (!txt) return null;
+  return { pid: pid || ("iem-" + (issued || txt.slice(0, 40))), issued, text: txt };
+}
+
+function finalizeDSM(cache) {
+  const byDate = {};
+  let last = null;
+  Object.values(cache.products || {}).forEach(p => {
+    if (!p || p.skip || !p.date) return;
+    const cur = byDate[p.date];
+    if (!cur || (p.type === "FINAL" && cur.type !== "FINAL") ||
+        (p.type === cur.type && String(p.issued || "") > String(cur.issued || ""))) byDate[p.date] = p;
+    if (!last || String(p.issued || "") > String(last.issued || "")) last = p;
+  });
+  cache.byDate = byDate; cache.last = last;
+}
+
+// IEM primary: every ~100s. New pid => badge.
+async function fetchDSM(force) {
+  const cache = loadDSM();
+  const now = Date.now();
+  if (!force && cache.lastFetch && now - cache.lastFetch < 100 * 1000) { renderDSM(); return; }
+  cache.lastFetch = now; saveDSM(cache);
+  try {
+    const r = await fetch(DSM_IEM_URL);
+    if (!r.ok) throw new Error("IEM HTTP " + r.status);
+    const page = parseDsmPage(await r.text());
+    if (!page) throw new Error("no DSMSEA product found on page");
+    cache.products = cache.products || {};
+    if (Object.keys(cache.products).length > 60) cache.products = {};
+    if (cache.lastSeenId !== page.pid) { cache.newAt = now; cache.lastSeenId = page.pid; }
+    if (!cache.products[page.pid]) {
+      const p = parseDSMText(page.text, page.issued);
+      p.raw = page.text.slice(0, 400); p.src = "IEM";
+      cache.products[page.pid] = p;
+    }
+    finalizeDSM(cache);
+    cache.iemErr = null;
+  } catch (e) {
+    cache.iemErr = String((e && e.message) || e);
+  }
+  saveDSM(cache);
+  renderDSM();
+}
+
+// NWS backfill: every ~25 min. Fills products the latest-only IEM page skipped
+// past while the app was closed. No badge from this rail.
+async function fetchDSMBackfill(force) {
+  const cache = loadDSM();
+  const now = Date.now();
+  if (!force && cache.lastBackfill && now - cache.lastBackfill < 25 * 60 * 1000) return;
+  cache.lastBackfill = now; saveDSM(cache);
+  try {
+    const r = await fetch("https://api.weather.gov/products/types/DSM/locations/SEA");
+    if (!r.ok) throw new Error("NWS list HTTP " + r.status);
+    const j = await r.json();
+    const items = (j["@graph"] || []).slice(0, 6);
+    if (!items.length) throw new Error("NWS DSM feed returned 0 products for SEA");
+    cache.products = cache.products || {};
+    let fetched = 0;
+    for (const it of items) {
+      const id = it.id || it["@id"];
+      if (!id || cache.products[id] || fetched >= 4) continue;
+      const url = it["@id"] || ("https://api.weather.gov/products/" + id);
+      try {
+        const rd = await fetch(url);
+        if (!rd.ok) continue;
+        const pj = await rd.json();
+        fetched++;
+        const p = parseDSMText(pj.productText || "", it.issuanceTime || pj.issuanceTime || null);
+        p.raw = (pj.productText || "").trim().slice(0, 400); p.src = "NWS";
+        cache.products[id] = p;
+      } catch (e) { /* next cycle */ }
+    }
+    finalizeDSM(cache);
+    cache.nwsErr = null;
+  } catch (e) {
+    cache.nwsErr = String((e && e.message) || e);
+  }
+  saveDSM(cache);
+  renderDSM();
+}
+
+function renderDSM() {
+  const body = document.getElementById("dsm-body");
+  if (!body) return;
+  const c = loadDSM();
+  let h = `<div style="font-size:10px;letter-spacing:0.6px;color:#7e8ea4;margin-bottom:3px">📄 DSM · ASOS DAILY SUMMARY (official max + time)</div>`;
+  if (c.iemErr && c.nwsErr) {
+    h += `<div style="font-size:11px;color:#fbbf24">both rails down — IEM: ${c.iemErr} · NWS: ${c.nwsErr} — retrying. <a href="#" onclick="fetchDSM(true);fetchDSMBackfill(true);return false" style="color:#60a5fa">↻ now</a></div>`;
+    body.innerHTML = h; return;
+  }
+  if (c.iemErr && c.last) {
+    h += `<div style="font-size:10px;color:#fbbf24">IEM primary: ${c.iemErr} — running on NWS backfill rail</div>`;
+  }
+  if (!c.last) {
+    h += `<div style="font-size:11px;color:#94a2b4">no DSM parsed yet. <a href="#" onclick="fetchDSM(true);return false" style="color:#60a5fa">↻ check now</a></div>`;
+    body.innerHTML = h; return;
+  }
+  const p = c.last;
+  const newMin = c.newAt ? Math.round((Date.now() - c.newAt) / 60000) : null;
+  if (newMin != null && newMin <= 15) h += `<div style="font-size:11px;color:#34d399;font-weight:700">🆕 new DSM landed ${newMin <= 0 ? "just now" : newMin + "m ago"}</div>`;
+  const dLabel = p.date ? p.date.slice(5).replace("-", "/") : "?";
+  const head = p.type === "FINAL"
+    ? `<b style="color:#cdd9e8">FINAL for ${dLabel}</b> — the completed climate day`
+    : `<b style="color:#a78bfa">RUNNING as of ${String(p.asOf).padStart(4, "0").replace(/(\d\d)(\d\d)/, "$1:$2")} LST</b> for ${dLabel}`;
+  h += `<div style="font-size:11px;line-height:1.55;color:#cdd9e8">${head}<br>`;
+  h += p.max != null
+    ? `MAX <b style="font-size:13px">${p.max}°</b> at <b>${lstToPT(p.maxLST, p.date)} PT</b> <span style="color:#7e8ea4">(official time-of-max)</span>`
+    : `<span style="color:#94a2b4">max missing (M) in this product</span>`;
+  if (p.min != null) h += ` · min ${p.min}° at ${lstToPT(p.minLST, p.date)} PT`;
+  h += `</div>`;
+  try {
+    const yd = ptDateOf(Date.now() - 86400000);
+    const dsmY = (c.byDate || {})[yd];
+    const cliY = (loadCLI().officials || {})[yd];
+    if (dsmY && dsmY.max != null && cliY && cliY.max != null) {
+      h += dsmY.max === cliY.max
+        ? `<div style="font-size:10px;color:#34d399">cross-check: DSM ${dsmY.max}° = CLI ${cliY.max}° ✓</div>`
+        : `<div style="font-size:10px;color:#fbbf24">⚠ DSM ${dsmY.max}° vs CLI ${cliY.max}° — CLI is the payer, trust it</div>`;
+    }
+  } catch (e) {}
+  h += `<div style="margin-top:4px;font-size:9px;color:#56657a">source: IEM AFOS (DSMSEA) polled ~100s${p.src === "NWS" ? " · this product via NWS backfill" : ""} · lag ≈1-5 min behind ASOS transmit · final drops ~1:10 AM PT · CLI stays settlement truth · <a href="#" onclick="fetchDSM(true);return false" style="color:#60a5fa">↻ now</a></div>`;
+  body.innerHTML = h;
+}
+
 // =============================================================================
 // METAR 6-hour max group (the "1-group"): the precise tenths-°C max, reported
 // at synoptic hours. The ~4:53 PM PDT ob covers 11AM–5PM — almost always the
@@ -6436,7 +6642,7 @@ function renderAll() {
     renderStatus, renderDayStrip, renderProjection, renderAICall, renderDrift,
     renderBackup, renderBlip, renderLive1m, renderKrnt1m, renderCollapse, renderConditions,
     renderNearbyStations, renderSynopticStations, renderStationDots,
-    renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderCheckpoint, renderTrust, renderLeadStn, renderFeeds,
+    renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderDSM, renderCheckpoint, renderTrust, renderLeadStn, renderFeeds,
     renderSkycams, renderChart, renderCurrent,
     renderAlertsSummary, renderCalLogStatus, renderAccLogStatus,
   ];
@@ -7935,6 +8141,10 @@ refresh();
 setInterval(refresh, 300_000); // refresh every 5 min (model data doesn't change faster)
 fetchCLI();                       // official climate reports: on load…
 setInterval(() => fetchCLI(), 1_800_000); // …and every 30 min (CLI only updates ~2×/day)
+fetchDSM();                       // ASOS daily summary via IEM AFOS: on load…
+setInterval(() => fetchDSM(), 120_000); // …then every 2 min (badge the moment a new one lands)
+fetchDSMBackfill();               // NWS rail backfills latest-only gaps…
+setInterval(() => fetchDSMBackfill(), 1_800_000); // …every 30 min
 setTimeout(() => fetchBlip(), 4000);      // 1-min archive backfill: after first paint…
 setInterval(() => fetchBlip(), 1_800_000); // …then every 30 min (archive lags days anyway)
 setInterval(() => pollLive1m(), 15_000);
