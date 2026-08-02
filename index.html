@@ -418,7 +418,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-07-30.42";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-07-30.43";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -3814,9 +3814,10 @@ function gradeCheckpointSnaps() {
     }
     s.graded = true; s.settle = r.settle; s.src = r.src; changed = true;
   });
-  // duration lean: reconstruct missing past days from the stored 1-min tape, then grade
+  // duration lean: reconstruct missing past days from BOTH stored tapes, then grade
   try {
-    const pts = (loadL1M().points || []);
+    const merged = [...(loadL1M().points || []), ...(loadF5().points || [])].sort((a, b) => a.t - b.t);
+    const pts = merged.filter((p, i) => i === 0 || p.t - merged[i - 1].t > 25000);
     new Set(pts.map(p => climateDayOfUTC(p.t))).forEach(d => {
       if (d >= climateDayOfUTC(Date.now()) || g.dur[d]) return;
       const pr = peakDurationRead(pts, d);
@@ -3825,7 +3826,7 @@ function gradeCheckpointSnaps() {
     Object.values(g.dur).forEach(e => {
       if (e.graded || e.skipped || e.date >= today) return;
       const dayPts = pts.filter(p => climateDayOfUTC(p.t) === e.date);
-      if (dayPts.length < 8) { e.skipped = true; e.reason = "no 1-min tape for this day"; changed = true; return; }
+      if (dayPts.length < 8) { e.skipped = true; e.reason = "no tape for this day"; changed = true; return; }
       const r = resolveSettleFor(e.date, today);
       if (!r) {
         if ((Date.parse(today) - Date.parse(e.date)) / 86400000 > 15) { e.skipped = true; changed = true; }
@@ -3971,12 +3972,12 @@ function renderCheckpoint() {
   });
   // keep today's duration-lean entry current; it freezes naturally when the day rolls
   try {
-    const livePts = loadL1M().points || [];
-    const liveAge = livePts.length ? (Date.now() - livePts[livePts.length - 1].t) / 60000 : null;
-    const pr = (liveAge != null && liveAge <= 20) ? peakDurationRead(livePts) : null;
+    const lane = freshestKseaLane(20);   // 1-min preferred, 5-min fallback (2026-07-30)
+    const pr = lane.pts ? peakDurationRead(lane.pts) : null;
     if (pr) {
       const dKey = climateDayOfUTC(Date.now());
       const e = durEntryFrom(pr, dKey);
+      e.lane = lane.src;
       const prev = grades.dur && grades.dur[dKey];
       if (!prev || prev.pick !== e.pick || prev.minsAtTop !== e.minsAtTop || prev.topDisp !== e.topDisp) {
         grades.dur = grades.dur || {}; grades.dur[dKey] = e; froze = true;
@@ -6092,7 +6093,7 @@ function renderCollapse() {
     const pr = peakDurationRead(pts);
     if (pr && !pr.locked && pr.pHigher != null) {
       const pct = Math.round(pr.pHigher * 100);
-      html += `<div style="margin-top:6px;font-size:10.5px;line-height:1.5;color:#cdd9e8">⏱ day's top display <b>${pr.topDisp}°F</b> (true ${pr.candTrue.join(" or ")}) held <b>${pr.minsAtTop}m</b>${pr.touchedAbove ? `, next step up ×${pr.touchedAbove}` : ""} → duration lean <b style="color:${pct>=65?"#f87171":pct<=35?"#34d399":"#fbbf24"}">P(${pr.hiSettle}°) ≈ ${pct}%</b>${(() => { try { const ds = Object.values(loadCkptGrades().dur || {}).filter(x => x.graded && !x.locked); return ds.length ? ` <span style="color:#7e8ea4">(live: ${ds.filter(x => x.hit).length}/${ds.length})</span>` : ""; } catch (err) { return ""; } })()} <span style="color:#7e8ea4">· ~1-in-4 days settle OUTSIDE this pair (3/13 this July) — the pick answers "which twin," not "is the top in"</span></div>`;
+      html += `<div style="margin-top:6px;font-size:10.5px;line-height:1.5;color:#cdd9e8">⏱ day's top display <b>${pr.topDisp}°F</b> (true ${pr.candTrue.join(" or ")}) held <b>${pr.minsAtTop}m</b>${pr.coarse ? ` <span style="color:#7e8ea4">(5-min lane · hold ±${Math.ceil(pr.cadenceMin)}m)</span>` : ""}${pr.touchedAbove ? `, next step up ×${pr.touchedAbove} obs` : ""} → duration lean <b style="color:${pct>=65?"#f87171":pct<=35?"#34d399":"#fbbf24"}">P(${pr.hiSettle}°) ≈ ${pct}%</b>${(() => { try { const ds = Object.values(loadCkptGrades().dur || {}).filter(x => x.graded && !x.locked); return ds.length ? ` <span style="color:#7e8ea4">(live: ${ds.filter(x => x.hit).length}/${ds.length})</span>` : ""; } catch (err) { return ""; } })()} <span style="color:#7e8ea4">· ~1-in-4 days settle OUTSIDE this pair (3/13 this July) — the pick answers "which twin," not "is the top in"</span></div>`;
     } else if (pr && pr.locked) {
       html += `<div style="margin-top:6px;font-size:10px;color:#34d399">⏱ day's top display ${pr.topDisp}°F is locked — settles ${pr.loSettle}°, nothing to infer.</div>`;
     }
@@ -6191,13 +6192,21 @@ function peakDurationRead(pts, forDay) {
   const nextTrueUp = (cands.length ? Math.max(...cands.map(c => c.trueF)) : Math.round(topDisp)) + 1;
   const nextDispUp = dispOf(nextTrueUp);
 
+  // Cadence-aware hold crediting (2026-07-30). Old code credited ≤3 min per gap
+  // regardless of lane — real minutes on the 1-min lane, but only 0.6× on the
+  // 5-min lane. The Jul-16 bands were fit on 5-min data in those SHRUNK units,
+  // so "40 credited" actually meant ≥70 REAL minutes (14 five-min intervals).
+  // Now every lane credits real minutes (capped near its own cadence) and the
+  // threshold below is translated to the same physical partition.
+  const gaps = day.slice(1).map((p, i) => (p.t - day[i].t) / 60000).filter(g => g > 0 && g < 45).sort((a, b) => a - b);
+  const cad = gaps.length ? Math.max(0.8, Math.min(6, gaps[Math.floor(gaps.length / 2)])) : 1;
   let minsAtTop = 0, touchedAbove = 0, lastT = null, firstTopT = null, lastTopT = null;
   day.forEach(p => {
     const d = dispOf(p.f);
     if (Math.abs(d - topDisp) < 0.05) {
       if (firstTopT == null) firstTopT = p.t;
       lastTopT = p.t;
-      if (lastT != null) minsAtTop += Math.min(3, (p.t - lastT) / 60000);
+      if (lastT != null) minsAtTop += Math.min(cad + 1.2, (p.t - lastT) / 60000);
     }
     if (d >= nextDispUp - 0.05) touchedAbove++;
     lastT = p.t;
@@ -6219,7 +6228,10 @@ function peakDurationRead(pts, forDay) {
     // HIGH twin 5/7. The old smooth curve crossed 50% at ~9 minutes and picked
     // HIGH on nearly everything — direction was right, threshold was broken.
     // Clamped away from 0/1: n is small and 5-min sampling misses brief touches.
-    else bandPos = minsAtTop >= 40 ? 0.70 : 0.15;
+    // 68 real minutes = exact translation of the Jul-16 "40 credited" boundary
+    // (old 5-min crediting: 14 intervals × 3 = 42 ≥ 40 → HIGH; 13 × 3 = 39 → LOW;
+    //  14 intervals = 70 real, 13 = 65 real; 68 splits the same days the same way).
+    else bandPos = minsAtTop >= 68 ? 0.70 : 0.15;
     pHigher = Math.max(0.05, Math.min(0.95, bandPos));
   }
 
@@ -6228,6 +6240,7 @@ function peakDurationRead(pts, forDay) {
     candTrue: cands.map(c => c.trueF),
     minsAtTop: Math.round(minsAtTop), spanMin: Math.round(spanMin),
     touchedAbove, nextDispUp, pHigher, nDay: day.length,
+    cadenceMin: +cad.toFixed(1), coarse: cad >= 3,
   };
 }
 
