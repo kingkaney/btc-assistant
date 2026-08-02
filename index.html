@@ -90,9 +90,6 @@
   .panel.collapsed .panel-body { display: none; }
   .panel.collapsed .panel-head { border-bottom: none; }
   .panel-peek { display: none; padding: 0 16px 11px; font-size: 10.5px; color: #a8b6c9; line-height: 1.5; cursor: pointer; }
-  /* always-open band: no tap affordance, lighter head, tighter rhythm */
-  .panel.always-open .panel-head { cursor: default; border-bottom: none; padding-bottom: 2px; }
-  .panel.always-open .panel-body { padding-top: 4px; }
   .panel.collapsed .panel-peek { display: block; }
 
   .stat-grid { display: grid; gap: 14px; }
@@ -176,6 +173,19 @@
     <div class="stat-grid cols-3" id="aicall-stats"><div style="color:#94a2b4">waiting for model…</div></div>
     <div id="aicall-why" style="font-size:12px;line-height:1.55;color:#dbe4f0;margin-top:14px;padding:11px 13px;background:rgba(96,165,250,0.09);border-left:2px solid #60a5fa;border-radius:4px"></div>
     <div id="aicall-meta" style="font-size:9px;color:#7e8ea4;margin-top:9px;display:flex;justify-content:space-between;align-items:center"></div>
+  </div>
+</div>
+
+<!-- LIVE CONDITIONS SUMMARY (today only) -->
+<div class="panel" id="conditions-panel">
+  <div class="panel-head">
+    <span>Live Conditions</span>
+    <span class="accent" id="conditions-src"></span>
+  </div>
+  <div class="panel-body">
+    <div id="conditions-summary" style="font-size:13px;color:#eef3fa;line-height:1.5;margin-bottom:10px">—</div>
+    <div id="conditions-effect"></div>
+    <div id="conditions-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;font-size:11px;margin-top:10px"></div>
     <div id="hit-probability" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.08)"></div>
   </div>
 </div>
@@ -183,8 +193,6 @@
 <!-- DRIFT VS FORECAST (intraday nowcast, today only) -->
 <div class="panel" id="drift-panel">
   <div class="panel-head"><span>📡 Tracking vs Forecast</span><span class="accent" id="drift-status">—</span></div>
-  <div class="panel-body" id="drift-body"></div>
-</div>
 <div class="panel" id="checkpoint-panel">
   <div class="panel-head"><span>🎯 Checkpoint Odds</span><span class="accent" id="checkpoint-status">—</span></div>
   <div class="panel-body" id="checkpoint-body"><div style="font-size:11px;color:#94a2b4">arms at 10 AM PT off the :53 ob…</div></div>
@@ -196,16 +204,19 @@
 </div>
 <div class="panel" id="speci-panel">
   <div class="panel-head"><span>🚨 SPECI Watch</span><span class="accent" id="speci-status">—</span></div>
-  <div class="panel-body" id="speci-body"><div style="font-size:11px;color:#94a2b4">watching for off-cycle special observations…</div></div>
-</div>
 <div class="panel" id="insight-panel">
   <div class="panel-head"><span>🧠 Edge Insights</span><span class="accent" id="insight-status">—</span></div>
-  <div class="panel-body" id="insight-body"><div style="font-size:11px;color:#94a2b4">computing ceiling, divergence, reliability…</div></div>
-</div>
 <div class="panel" id="sixhr-panel">
   <div class="panel-head"><span>📊 6-Hour Max</span><span class="accent" id="sixhr-status">—</span></div>
   <div class="panel-body" id="sixhr-body"><div style="font-size:11px;color:#94a2b4">waiting for the synoptic 6-hour max report…</div></div>
   <div class="panel-body" id="dsm-body" style="border-top:1px solid rgba(255,255,255,0.08)"><div style="font-size:11px;color:#94a2b4">first DSM check pending…</div></div>
+</div>
+
+  <div class="panel-body" id="insight-body"><div style="font-size:11px;color:#94a2b4">computing ceiling, divergence, reliability…</div></div>
+</div>
+  <div class="panel-body" id="speci-body"><div style="font-size:11px;color:#94a2b4">watching for off-cycle special observations…</div></div>
+</div>
+  <div class="panel-body" id="drift-body"></div>
 </div>
 
 
@@ -242,19 +253,6 @@
 <div class="panel" id="collapse-panel">
   <div class="panel-head"><span>🧩 Collapse Decoder</span><span class="accent" id="collapse-status">—</span></div>
   <div class="panel-body" id="collapse-body"><div style="font-size:11px;color:#94a2b4">waiting for the 1-min lane…</div></div>
-</div>
-
-<!-- LIVE CONDITIONS SUMMARY (today only) -->
-<div class="panel" id="conditions-panel">
-  <div class="panel-head">
-    <span>Live Conditions</span>
-    <span class="accent" id="conditions-src"></span>
-  </div>
-  <div class="panel-body">
-    <div id="conditions-summary" style="font-size:13px;color:#eef3fa;line-height:1.5;margin-bottom:10px">—</div>
-    <div id="conditions-effect"></div>
-    <div id="conditions-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;font-size:11px;margin-top:10px"></div>
-  </div>
 </div>
 
 <!-- LEAD INDICATORS (nearby station freshness arbitrage) -->
@@ -420,7 +418,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-02.48";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-02.43";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -2140,12 +2138,13 @@ function renderConditions() {
   const summaryEl = document.getElementById("conditions-summary");
   const gridEl    = document.getElementById("conditions-grid");
   const srcEl     = document.getElementById("conditions-src");
+  const hitEl     = document.getElementById("hit-probability");
 
   if (!c) {
     summaryEl.textContent = "Live conditions unavailable.";
     gridEl.innerHTML = "";
     srcEl.textContent = "";
-    try { renderHitProb(); } catch (e) {}
+    hitEl.innerHTML = "";
     return;
   }
 
@@ -2186,39 +2185,18 @@ function renderConditions() {
       sub: c.cloud!=null?`cloud ${c.cloud}%`:"" }),
   ].join("");
 
-  // Hit probability now lives under the AI Daily Call panel; it re-renders on its
-  // own 2-minute timer so it tracks the live feed instead of the 5-min refresh.
-  try { renderHitProb(); } catch (e) {}
-}
-
-// Standalone so it can tick independently of renderConditions (2026-08-02).
-function renderHitProb() {
-  const hitEl = document.getElementById("hit-probability");
-  if (!hitEl) return;
-  const HEAD = `<div style="font-size:9px;letter-spacing:0.2em;color:#9fb0c4;text-transform:uppercase">Chance of hitting projected high</div>`;
-  const isToday = state.days.length && state.selectedDate === state.days[0].date;
-  if (!isToday) { hitEl.innerHTML = ""; return; }
-
+  // Hit probability
   const hit = computeHitProbability();
   if (!hit) {
-    hitEl.innerHTML = `${HEAD}<div style="color:#9ca3af;font-size:12px;margin-top:6px">Need live data + projection to compute.</div>`;
+    hitEl.innerHTML = `<div style="font-size:9px;letter-spacing:0.2em;color:#9fb0c4;text-transform:uppercase;margin-bottom:6px">Chance of hitting projected high</div>
+      <div style="color:#9ca3af;font-size:12px">Need live data + projection to compute.</div>`;
     return;
   }
-  const stamp = (() => {
-    try { return new Date().toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }); }
-    catch (e) { return ""; }
-  })();
-  const obAge = (() => {
-    try {
-      const lane = freshestKseaLane(60);
-      return lane.age != null && lane.age < 1e8 ? `${Math.round(lane.age)}m-old ob` : null;
-    } catch (e) { return null; }
-  })();
 
   hitEl.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
-      ${HEAD}
-      <div style="font-size:9px;color:#9ca3af">recomputed ${stamp} · every 2 min</div>
+      <div style="font-size:9px;letter-spacing:0.2em;color:#9fb0c4;text-transform:uppercase">Chance of hitting projected high</div>
+      <div style="font-size:9px;color:#9ca3af">updates each refresh</div>
     </div>
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
       <span style="font-size:30px;font-variant-numeric:tabular-nums;color:${hit.color};font-weight:600">${hit.pct.toFixed(0)}<span style="font-size:14px">%</span></span>
@@ -2227,7 +2205,7 @@ function renderHitProb() {
     <div style="position:relative;height:6px;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden;margin-bottom:6px">
       <div style="position:absolute;left:0;top:0;bottom:0;width:${hit.pct.toFixed(0)}%;background:${hit.color};transition:width 0.6s ease"></div>
     </div>
-    <div style="font-size:10px;color:#94a2b4;line-height:1.4">${hit.reason}${obAge ? ` <span style="color:#7e8ea4">· from a ${obAge}</span>` : ""}</div>
+    <div style="font-size:10px;color:#94a2b4;line-height:1.4">${hit.reason}</div>
   `;
 }
 
@@ -3101,11 +3079,11 @@ function renderInsights() {
     const trust = here.hitRate >= 0.6 ? "trustworthy" : here.hitRate >= 0.4 ? "mixed" : "shaky";
     const tcol = here.hitRate >= 0.6 ? "#34d399" : here.hitRate >= 0.4 ? "#f59e0b" : "#f87171";
     html += `<div style="margin-top:8px;padding:7px 9px;background:rgba(167,139,250,0.07);border-left:2px solid #a78bfa;border-radius:4px;font-size:10.5px;line-height:1.55;color:#ddd6fe">
-      🧭 Today\u2019s regime: <b>${curRegime}</b>. Your locked calls here have hit <b style="color:${tcol}">${hr}% (${here.hits}/${here.n})</b>${here.mae != null ? `, MAE ${here.mae.toFixed(1)}\u00b0` : ""}${here.meanBias != null ? `, bias ${here.meanBias >= 0 ? "+" : ""}${here.meanBias.toFixed(1)}\u00b0` : ""} \u2014 tools look <b style="color:${tcol}">${trust}</b> in this regime${here.n < 8 ? " (small sample, growing)" : ""}.</div>`;
+      \U0001f9ed Today\u2019s regime: <b>${curRegime}</b>. Your locked calls here have hit <b style="color:${tcol}">${hr}% (${here.hits}/${here.n})</b>${here.mae != null ? `, MAE ${here.mae.toFixed(1)}\u00b0` : ""}${here.meanBias != null ? `, bias ${here.meanBias >= 0 ? "+" : ""}${here.meanBias.toFixed(1)}\u00b0` : ""} \u2014 tools look <b style="color:${tcol}">${trust}</b> in this regime${here.n < 8 ? " (small sample, growing)" : ""}.</div>`;
     statusBits.push(`${curRegime} ${hr}%`);
   } else {
     html += `<div style="margin-top:8px;padding:7px 9px;background:rgba(167,139,250,0.05);border-left:2px solid #6b5fa0;border-radius:4px;font-size:10px;line-height:1.5;color:#b9b1d6">
-      🧭 Today\u2019s regime: <b>${curRegime}</b>. Reliability for this regime needs \u22653 graded days (have ${here ? here.n : 0}; ${totalGraded} total logged). It learns automatically as official settles come in \u2014 trust grows with n.</div>`;
+      \U0001f9ed Today\u2019s regime: <b>${curRegime}</b>. Reliability for this regime needs \u22653 graded days (have ${here ? here.n : 0}; ${totalGraded} total logged). It learns automatically as official settles come in \u2014 trust grows with n.</div>`;
   }
 
   body.innerHTML = html || '<div style="font-size:11px;color:#94a2b4">No insights available yet.</div>';
@@ -3535,20 +3513,9 @@ function renderTrust() {
   let h = "";
   ranked.forEach((nm, i) => {
     const c = t[nm];
-    const chips = c.last.map(x => `<span style="color:${Math.abs(x.e) <= 1 ? "#34d399" : Math.abs(x.e) <= 2 ? "#fbbf24" : "#f87171"}">${sgn(x.e)}</span>`).join("");
-    h += `<div style="display:flex;align-items:baseline;gap:6px;padding:1.5px 0;font-size:10.5px;color:#cdd9e8;white-space:nowrap">`
-      + `<b style="color:${i === 0 ? "#34d399" : "#eef3fa"};flex:0 0 68px;overflow:hidden;text-overflow:ellipsis">${i + 1}. ${nm}</b>`
-      + `<span style="flex:0 0 42px;text-align:right"><b>${c.mae.toFixed(2)}</b></span>`
-      + `<span style="flex:0 0 38px;text-align:right;color:#9fb0c4">${sgn(c.bias)}</span>`
-      + `<span style="flex:0 0 34px;text-align:right;color:#9fb0c4">${Math.round(c.w1)}%</span>`
-      + `<span style="flex:0 0 30px;text-align:right;color:#7e8ea4">${c.n}</span>`
-      + `<span style="flex:1;text-align:right;font-size:9.5px;letter-spacing:1px;font-variant-numeric:tabular-nums">${chips}</span>`
-      + `</div>`;
+    const chips = c.last.map(x => `<span style="color:${Math.abs(x.e) <= 1 ? "#34d399" : Math.abs(x.e) <= 2 ? "#fbbf24" : "#f87171"}">${sgn(x.e)}</span>`).join(" ");
+    h += `<div style="padding:4px 0;font-size:11px;color:#cdd9e8"><b style="color:${i === 0 ? "#34d399" : "#eef3fa"}">${i + 1}. ${nm}</b> — MAE <b>${c.mae.toFixed(2)}°</b> · bias ${sgn(c.bias)}° · ±1°: ${Math.round(c.w1)}% <span style="color:#7e8ea4">· n=${c.n}</span><br><span style="font-size:9.5px;color:#7e8ea4">last: ${chips}</span></div>`;
   });
-  if (ranked.length) h = `<div style="display:flex;gap:6px;padding-bottom:2px;font-size:8.5px;letter-spacing:0.5px;color:#56657a;white-space:nowrap">`
-    + `<span style="flex:0 0 68px">COMPONENT</span><span style="flex:0 0 42px;text-align:right">MAE</span>`
-    + `<span style="flex:0 0 38px;text-align:right">BIAS</span><span style="flex:0 0 34px;text-align:right">±1°</span>`
-    + `<span style="flex:0 0 30px;text-align:right">N</span><span style="flex:1;text-align:right">LAST 5</span></div>` + h;
   // mechanical attribution — only cells with n≥4, only deltas ≥1°
   const why = [];
   ranked.forEach(nm => {
@@ -3560,15 +3527,14 @@ function renderTrust() {
   });
   if (why.length) {
     h += `<div style="margin-top:6px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.08);font-size:10px;letter-spacing:0.5px;color:#7e8ea4">WHY THEY MISS (measured splits, n≥4 per cell)</div>`;
-    why.slice(0, 3).forEach(w => { h += `<div style="font-size:9.5px;color:#cdd9e8;line-height:1.4">· ${w}</div>`; });
-    if (why.length > 3) h += `<div style="font-size:9px;color:#56657a">+${why.length - 3} more split${why.length - 3 > 1 ? "s" : ""} measured</div>`;
+    why.slice(0, 5).forEach(w => { h += `<div style="font-size:10px;color:#cdd9e8;padding:1px 0">· ${w}</div>`; });
   } else if (ranked.length) {
     h += `<div style="margin-top:6px;font-size:9.5px;color:#7e8ea4">attribution splits need n≥4 per cell — still collecting.</div>`;
   }
   if (collecting.length) {
     h += `<div style="margin-top:5px;font-size:9.5px;color:#7e8ea4">collecting (n<5): ${collecting.map(nm => `${nm} n=${t[nm].n}`).join(" · ")}</div>`;
   }
-  h += `<div style="margin-top:5px;font-size:8.5px;color:#56657a;line-height:1.35">truth = final CLI · ENS morning locks only · HRRR pre-${HRRR_VALID_FROM} excluded (GFS duplicate) · splits measured, never narrative</div>`;
+  h += `<div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.5">truth = final CLI only · ENS counts morning locks only (post-noon snapshots are look-ahead, excluded) · HRRR history before ${HRRR_VALID_FROM} was the GFS-duplicate feed and is excluded · attribution is measured splits, never narrative.</div>`;
   body.innerHTML = h;
   if (statusEl) {
     statusEl.textContent = ranked.length ? `${ranked[0]} ${t[ranked[0]].mae.toFixed(1)}°` : `collecting`;
@@ -4006,7 +3972,7 @@ function renderCheckpoint() {
   });
   // keep today's duration-lean entry current; it freezes naturally when the day rolls
   try {
-    const lane = freshestKseaLane(20);   // 1-min preferred, 5-min fallback (2026-07-30)
+    const lane = freshestKseaLane(20);   // 1-min preferred, 5-min fallback
     const pr = lane.pts ? peakDurationRead(lane.pts) : null;
     if (pr) {
       const dKey = climateDayOfUTC(Date.now());
@@ -6120,9 +6086,8 @@ function renderCollapse() {
   </div>
   <div style="margin-top:6px;padding:6px 9px;background:rgba(255,255,255,0.04);border-left:2px solid ${tellCol};border-radius:4px;font-size:10.5px;line-height:1.55;color:#cdd9e8">${tell}</div>`;
 
-  // --- 2. the duration lean on the day's top step (1-min lane only — its
-  // hold-time crediting is cadence-aware since b.43, so both lanes run; 5-min
-  // reads carry their ±cadence tag so the resolution is never hidden) ---
+  // --- 2. the duration lean on the day's top step (runs on whichever KSEA lane
+  // is fresh; 5-min reads are labeled so the resolution is never hidden) ---
   try {
     const pr = peakDurationRead(pts);
     if (pr && !pr.locked && pr.pHigher != null) {
@@ -6226,10 +6191,6 @@ function peakDurationRead(pts, forDay) {
   const nextTrueUp = (cands.length ? Math.max(...cands.map(c => c.trueF)) : Math.round(topDisp)) + 1;
   const nextDispUp = dispOf(nextTrueUp);
 
-  // Hold crediting: ≤3 min per gap. Left as originally written — the 1-min relay
-  // arrives in ~3-min blocks, so this is real time on that lane, and the Jul-16
-  // bands were fit on 5-min data in exactly these units. Do not "unit-fix" this
-  // without refitting the bands (tried 2026-07-30, reverted 08-02).
   let minsAtTop = 0, touchedAbove = 0, lastT = null, firstTopT = null, lastTopT = null;
   day.forEach(p => {
     const d = dispOf(p.f);
@@ -6253,7 +6214,7 @@ function peakDurationRead(pts, forDay) {
     let bandPos;
     if (touchedAbove >= 2) bandPos = 0.90;
     else if (touchedAbove === 1) bandPos = 0.72;
-    // Calibrated 2026-07-16 on the 5-min corpus, n=10 verified twin-resolvable
+    // Recalibrated 2026-07-16 on the 5-min corpus, n=10 verified twin-resolvable
     // July days: hold <40m + no touch → LOW twin 3/3; hold ≥40m + no touch →
     // HIGH twin 5/7. The old smooth curve crossed 50% at ~9 minutes and picked
     // HIGH on nearly everything — direction was right, threshold was broken.
@@ -6370,7 +6331,7 @@ function renderLive1m() {
         const pct = Math.round(pr.pHigher * 100);
         const col = pct >= 65 ? "#f87171" : pct <= 35 ? "#34d399" : "#fbbf24";
         html += `<div style="margin-top:7px;padding:7px 9px;background:rgba(96,165,250,0.08);border-left:2px solid #60a5fa;border-radius:4px;font-size:10.5px;line-height:1.6;color:#cdd9e8">
-          🔬 <b>Peak-duration read</b>${(() => { try { return freshestKseaLane(20).src === "5-min" ? ` <span style="color:#a78bfa">· running off the 5-min lane</span>` : ""; } catch (e) { return ""; } })()} — top display <b>${pr.topDisp}°F</b> held <b>${pr.minsAtTop} min</b>${pr.touchedAbove ? `, next step up appeared <b>${pr.touchedAbove}×</b>` : ", next step up never appeared"}.<br>
+          🔬 <b>Peak-duration read</b> — top display <b>${pr.topDisp}°F</b> held <b>${pr.minsAtTop} min</b>${pr.touchedAbove ? `, next step up appeared <b>${pr.touchedAbove}×</b>` : ", next step up never appeared"}.<br>
           The whole-°C display collapses <b>${pr.candTrue.join("°F & ")}°F</b> — settles <b>${pr.loSettle}°</b> or <b>${pr.hiSettle}°</b>, and only the T-group tenths tells them apart.<br>
           Estimated <b style="color:${col}">P(settles ${pr.hiSettle}°) ≈ ${pct}%</b> · P(settles ${pr.loSettle}°) ≈ ${100 - pct}%.
           ${peakish ? "" : `<span style="color:#7e8ea4"> (pre-peak — firms as the plateau builds)</span>`}
@@ -6679,7 +6640,7 @@ function renderAll() {
   // missing day object silently killed everything after it in this list.
   const seq = [
     renderStatus, renderDayStrip, renderProjection, renderAICall, renderDrift,
-    renderBackup, renderBlip, renderLive1m, renderKrnt1m, renderCollapse, renderConditions, renderHitProb,
+    renderBackup, renderBlip, renderLive1m, renderKrnt1m, renderCollapse, renderConditions,
     renderNearbyStations, renderSynopticStations, renderStationDots,
     renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderDSM, renderCheckpoint, renderTrust, renderLeadStn, renderFeeds,
     renderSkycams, renderChart, renderCurrent,
@@ -8138,21 +8099,10 @@ const PANELS_KEY = "ksea_panels_v1";
   const DEFAULT_COLLAPSED = new Set([
     "leads-panel", "map-panel", "skycam-panel", "live1m-panel", "conditions-panel",
   ]);
-  // Always open, never collapsible (2026-08-02). These read as a single continuous
-  // band; the chevron + clipped peek made them look like tabs and hid the numbers
-  // behind a tap. No chevron, no peek, no click handler — just the content.
-  const NEVER_COLLAPSE = new Set([
-    "drift-panel", "speci-panel", "insight-panel", "sixhr-panel",
-  ]);
   document.querySelectorAll(".panel").forEach((p, i) => {
     const head = p.querySelector(".panel-head");
     if (!head || head.dataset.coll || head.hasAttribute("onclick")) return;  // skip panels with their own toggle
     head.dataset.coll = "1";
-    if (NEVER_COLLAPSE.has(p.id)) {
-      p.classList.remove("collapsed");        // clear any stale saved state
-      p.classList.add("always-open");
-      return;
-    }
     const id = p.id || ("panel-" + i);
     const chev = document.createElement("span");
     chev.className = "pchev"; chev.textContent = "▼";
@@ -8204,7 +8154,6 @@ setInterval(() => { try { renderCollapse(); } catch (e) {} }, 15_000);
 setInterval(() => { poll5m().catch(() => {}); }, 60_000);
 poll5m().catch(() => {});
 setInterval(() => { pollLeadStn().catch(() => {}); }, 120_000);
-setInterval(() => { try { renderHitProb(); } catch (e) {} }, 120_000); // hit-chance ticks on its own
 pollLeadStn(true).catch(() => {});
 fetchSpeci();                              // SPECI watch: on load…
 setInterval(() => fetchSpeci(), 45_000);   // …then every 45s (catch off-cycle specials)
