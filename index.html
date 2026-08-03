@@ -85,6 +85,13 @@
     font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: #8ba0bd; cursor: pointer; user-select: none; -webkit-user-select: none; }
   .panel-head .accent { color: #fcd34d; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
   .panel-body { padding: 14px 16px; }
+  /* display-only suppression — engines still compute and grade, nothing is disabled */
+  .ck-hide { display: none !important; }
+  .obs-sec { font-size: 9.5px; letter-spacing: 0.7px; color: #7e8ea4; text-transform: uppercase;
+             display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+  .obs-sec + div { font-size: 11px; line-height: 1.5; color: #cdd9e8; }
+  .obs-div { margin-top: 11px; padding-top: 9px; border-top: 1px solid rgba(255,255,255,0.07); }
+  .obs-chip { font-size: 9.5px; letter-spacing: 0.5px; }
   .pchev { display: inline-block; margin-right: 7px; color: #7e8ea4; font-size: 8px; transition: transform 0.15s ease; }
   .panel.collapsed .pchev { transform: rotate(-90deg); }
   .panel.collapsed .panel-body { display: none; }
@@ -202,19 +209,17 @@
   <div class="panel-head"><span>🧠 Component Trust</span><span class="accent" id="trust-status">—</span></div>
   <div class="panel-body" id="trust-body"><div style="font-size:11px;color:#94a2b4">collecting…</div></div>
 </div>
-<div class="panel" id="speci-panel">
-  <div class="panel-head"><span>🚨 SPECI Watch</span><span class="accent" id="speci-status">—</span></div>
-<div class="panel" id="insight-panel">
-  <div class="panel-head"><span>🧠 Edge Insights</span><span class="accent" id="insight-status">—</span></div>
-<div class="panel" id="sixhr-panel">
-  <div class="panel-head"><span>📊 6-Hour Max</span><span class="accent" id="sixhr-status">—</span></div>
-  <div class="panel-body" id="sixhr-body"><div style="font-size:11px;color:#94a2b4">waiting for the synoptic 6-hour max report…</div></div>
-  <div class="panel-body" id="dsm-body" style="border-top:1px solid rgba(255,255,255,0.08)"><div style="font-size:11px;color:#94a2b4">first DSM check pending…</div></div>
-</div>
-
-  <div class="panel-body" id="insight-body"><div style="font-size:11px;color:#94a2b4">computing ceiling, divergence, reliability…</div></div>
-</div>
-  <div class="panel-body" id="speci-body"><div style="font-size:11px;color:#94a2b4">watching for off-cycle special observations…</div></div>
+<div class="panel" id="obs-panel">
+  <div class="panel-head"><span>🔭 Observations</span><span class="accent" id="obs-status">—</span></div>
+  <div class="panel-body">
+    <div class="obs-sec"><span>🚨 SPECI Watch</span><span class="accent obs-chip" id="speci-status">—</span></div>
+    <div id="speci-body"><div style="font-size:11px;color:#94a2b4">watching for off-cycle special observations…</div></div>
+    <div class="obs-sec obs-div"><span>🧠 Edge Insights</span><span class="accent obs-chip" id="insight-status">—</span></div>
+    <div id="insight-body"><div style="font-size:11px;color:#94a2b4">computing ceiling, divergence, reliability…</div></div>
+    <div class="obs-sec obs-div"><span>📊 6-Hour Max</span><span class="accent obs-chip" id="sixhr-status">—</span></div>
+    <div id="sixhr-body"><div style="font-size:11px;color:#94a2b4">waiting for the synoptic 6-hour max report…</div></div>
+    <div id="dsm-body" style="margin-top:8px;padding-top:7px;border-top:1px solid rgba(255,255,255,0.07)"><div style="font-size:11px;color:#94a2b4">first DSM check pending…</div></div>
+  </div>
 </div>
   <div class="panel-body" id="drift-body"></div>
 </div>
@@ -418,7 +423,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-02.43";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-02.44";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -3513,9 +3518,19 @@ function renderTrust() {
   let h = "";
   ranked.forEach((nm, i) => {
     const c = t[nm];
-    const chips = c.last.map(x => `<span style="color:${Math.abs(x.e) <= 1 ? "#34d399" : Math.abs(x.e) <= 2 ? "#fbbf24" : "#f87171"}">${sgn(x.e)}</span>`).join(" ");
-    h += `<div style="padding:4px 0;font-size:11px;color:#cdd9e8"><b style="color:${i === 0 ? "#34d399" : "#eef3fa"}">${i + 1}. ${nm}</b> — MAE <b>${c.mae.toFixed(2)}°</b> · bias ${sgn(c.bias)}° · ±1°: ${Math.round(c.w1)}% <span style="color:#7e8ea4">· n=${c.n}</span><br><span style="font-size:9.5px;color:#7e8ea4">last: ${chips}</span></div>`;
+    const chips = c.last.map(x => `<span style="color:${Math.abs(x.e) <= 1 ? "#34d399" : Math.abs(x.e) <= 2 ? "#fbbf24" : "#f87171"}">${sgn(x.e)}</span>`).join("");
+    h += `<div style="display:flex;align-items:baseline;gap:6px;padding:1.5px 0;font-size:10.5px;color:#cdd9e8;white-space:nowrap">`
+      + `<b style="color:${i === 0 ? "#34d399" : "#eef3fa"};flex:0 0 66px;overflow:hidden;text-overflow:ellipsis">${i + 1}. ${nm}</b>`
+      + `<span style="flex:0 0 40px;text-align:right"><b>${c.mae.toFixed(2)}</b></span>`
+      + `<span style="flex:0 0 36px;text-align:right;color:#9fb0c4">${sgn(c.bias)}</span>`
+      + `<span style="flex:0 0 32px;text-align:right;color:#9fb0c4">${Math.round(c.w1)}%</span>`
+      + `<span style="flex:0 0 26px;text-align:right;color:#7e8ea4">${c.n}</span>`
+      + `<span style="flex:1;text-align:right;font-size:9.5px;letter-spacing:1px">${chips}</span></div>`;
   });
+  if (ranked.length) h = `<div style="display:flex;gap:6px;padding-bottom:2px;font-size:8.5px;letter-spacing:0.5px;color:#56657a;white-space:nowrap">`
+    + `<span style="flex:0 0 66px">COMPONENT</span><span style="flex:0 0 40px;text-align:right">MAE</span>`
+    + `<span style="flex:0 0 36px;text-align:right">BIAS</span><span style="flex:0 0 32px;text-align:right">±1°</span>`
+    + `<span style="flex:0 0 26px;text-align:right">N</span><span style="flex:1;text-align:right">LAST 5</span></div>` + h;
   // mechanical attribution — only cells with n≥4, only deltas ≥1°
   const why = [];
   ranked.forEach(nm => {
@@ -3527,14 +3542,15 @@ function renderTrust() {
   });
   if (why.length) {
     h += `<div style="margin-top:6px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.08);font-size:10px;letter-spacing:0.5px;color:#7e8ea4">WHY THEY MISS (measured splits, n≥4 per cell)</div>`;
-    why.slice(0, 5).forEach(w => { h += `<div style="font-size:10px;color:#cdd9e8;padding:1px 0">· ${w}</div>`; });
+    why.slice(0, 3).forEach(w => { h += `<div style="font-size:9.5px;color:#cdd9e8;line-height:1.4">· ${w}</div>`; });
+    if (why.length > 3) h += `<div style="font-size:9px;color:#56657a">+${why.length - 3} more measured</div>`;
   } else if (ranked.length) {
     h += `<div style="margin-top:6px;font-size:9.5px;color:#7e8ea4">attribution splits need n≥4 per cell — still collecting.</div>`;
   }
   if (collecting.length) {
     h += `<div style="margin-top:5px;font-size:9.5px;color:#7e8ea4">collecting (n<5): ${collecting.map(nm => `${nm} n=${t[nm].n}`).join(" · ")}</div>`;
   }
-  h += `<div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.5">truth = final CLI only · ENS counts morning locks only (post-noon snapshots are look-ahead, excluded) · HRRR history before ${HRRR_VALID_FROM} was the GFS-duplicate feed and is excluded · attribution is measured splits, never narrative.</div>`;
+  h += `<div style="margin-top:5px;font-size:8.5px;color:#56657a;line-height:1.35">truth = final CLI · ENS morning locks only · HRRR pre-${HRRR_VALID_FROM} excluded · splits measured, never narrative</div>`;
   body.innerHTML = h;
   if (statusEl) {
     statusEl.textContent = ranked.length ? `${ranked[0]} ${t[ranked[0]].mae.toFixed(1)}°` : `collecting`;
@@ -3759,7 +3775,7 @@ function ladderSectionHtml(grades, markDirty) {
     const graded = Object.values(grades.ladder || {}).filter(e => e.graded);
     if (graded.length) {
       const mae = graded.reduce((a, e) => a + Math.abs(e.proj - e.settle), 0) / graded.length;
-      h += `<div style="font-size:9.5px;color:#7e8ea4;margin-top:3px">ladder self-grade: projection MAE ${mae.toFixed(1)}° over ${graded.length} hourly reads</div>`;
+      h += `<div class="ck-hide" style="font-size:9.5px;color:#7e8ea4;margin-top:3px">ladder self-grade: projection MAE ${mae.toFixed(1)}° over ${graded.length} hourly reads</div>`;
     }
     h += `</div>`;
     return h;
@@ -3869,9 +3885,9 @@ function ckptGradeSummaryHtml(g) {
   const snaps = Object.values((g && g.snaps) || {}).filter(s => s.graded);
   const durs = Object.values((g && g.dur) || {}).filter(e => e.graded && !e.locked);
   if (!snaps.length && !durs.length) {
-    return `<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px;font-size:10px;color:#7e8ea4">SELF-GRADE · n=0 — every chip shown today gets scored against the official settle tomorrow morning. The table earns trust with an n, not a story.</div>`;
+    return `<div class="ck-hide" style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px;font-size:10px;color:#7e8ea4">SELF-GRADE · n=0 — every chip shown today gets scored against the official settle tomorrow morning. The table earns trust with an n, not a story.</div>`;
   }
-  let h = `<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px">`;
+  let h = `<div class="ck-hide" style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px">`;
   if (snaps.length) {
     const buckets = [[0,20],[20,35],[35,50],[50,65],[65,80],[80,101]];
     const agg = buckets.map(b => ({ lo: b[0], hi: b[1], n: 0, hit: 0, psum: 0 }));
@@ -4011,14 +4027,14 @@ function ckptSectionHtml(pt, snap, frozen) {
     <div style="font-size:24px;font-weight:800;color:#eef3fa;font-variant-numeric:tabular-nums">${callSettle}°</div>
     <div style="font-size:10px;line-height:1.45;color:#94a2b4">checkpoint call (${call.toFixed(1)}°F) · 50% band ${(snap.tF + T.p25).toFixed(1)}–${(snap.tF + T.p75).toFixed(1)}°F${divergence}</div>
   </div>`;
-  h += `<div style="display:flex;flex-wrap:wrap;gap:5px;margin:4px 0 8px">`;
+  h += `<div class="ck-hide" style="display:flex;flex-wrap:wrap;gap:5px;margin:4px 0 8px">`;
   ckptChips(pt.key, snap.tF, snap.sky).forEach(c => {
     const col = c.p >= 60 ? "#34d399" : c.p >= 30 ? "#fbbf24" : "#f87171";
     h += `<div style="padding:4px 8px;border:1px solid ${c.noisy ? "rgba(148,162,180,0.35)" : "rgba(255,255,255,0.14)"};border-radius:6px;font-size:11px;${c.noisy ? "opacity:0.55" : ""}">
       <span style="color:#cdd9e8">≥${c.K}°</span> <b style="color:${col}">${Math.round(c.p)}%</b>${c.noisy ? "<span style=\"font-size:8px;color:#7e8ea4\"> noisy</span>" : ""}</div>`;
   });
   h += `</div>`;
-  h += `<div style="font-size:9.5px;color:#7e8ea4;margin-bottom:6px">floor: 95% of these days add at least +${T.floor5.toFixed(1)}°F from here → high ≥ ${(snap.tF + T.floor5).toFixed(1)}°F is the 5th-percentile line. </div>`;
+  h += `<div class="ck-hide" style="font-size:9.5px;color:#7e8ea4;margin-bottom:6px">floor: 95% of these days add at least +${T.floor5.toFixed(1)}°F from here → high ≥ ${(snap.tF + T.floor5).toFixed(1)}°F is the 5th-percentile line. </div>`;
   return h;
 }
 
