@@ -141,7 +141,7 @@
 
 <div class="header">
   <div>
-    <div class="station-id">KSEA · Sea-Tac Intl · 47.45N 122.31W</div>
+    <div class="station-id">KSEA · Sea-Tac Intl<span class="ck-hide"> · 47.45N 122.31W</span></div>
     <h1>High Projection</h1>
   </div>
   <div>
@@ -153,7 +153,7 @@
 <div class="status">
   <div><span class="dot load" id="status-dot"></span><span id="status-label">loading</span></div>
   <div id="fetch-age" style="color:rgba(255,255,255,0.85);text-shadow:0 1px 2px rgba(0,0,0,0.3)">—</div>
-  <div id="members-info" style="color:rgba(255,255,255,0.85);text-shadow:0 1px 2px rgba(0,0,0,0.3)"></div>
+  <div id="members-info" class="ck-hide" style="color:rgba(255,255,255,0.85);text-shadow:0 1px 2px rgba(0,0,0,0.3)"></div>
 </div>
 
 <div id="error" style="display:none"></div>
@@ -163,13 +163,13 @@
 
 <!-- SELECTED DAY SUMMARY -->
 <div class="panel" id="projection-panel">
-  <div class="panel-head"><span id="sel-day-title">Projection</span><span class="accent" id="sel-day-conf"></span></div>
+  <div class="panel-head"><span id="sel-day-title" class="ck-hide">Projection</span><span class="accent" id="sel-day-conf"></span></div>
   <div class="panel-body">
     <div id="day-summary" style="font-size:13px;line-height:1.5;color:#d8cfc2;margin:0 0 14px;padding:10px 12px;background:rgba(251,191,36,0.10);border-left:2px solid #fcd34d;border-radius:4px">—</div>
-    <div class="stat-grid cols-3" id="proj-stats"><div style="color:#94a2b4">loading ensemble…</div></div>
+    <div class="stat-grid cols-2" id="proj-stats"><div style="color:#94a2b4">loading ensemble…</div></div>
     <div id="calib-note" style="font-size:10px;color:#94a2b4;margin-top:8px;line-height:1.5"></div>
     <div id="current-ticker" style="margin-top:16px"></div>
-    <div id="boundary-bar" style="margin-top:16px"></div>
+    <div id="boundary-bar" class="ck-hide" style="margin-top:16px"></div>
   </div>
 </div>
 
@@ -193,7 +193,7 @@
     <div id="conditions-summary" style="font-size:13px;color:#eef3fa;line-height:1.5;margin-bottom:10px">—</div>
     <div id="conditions-effect"></div>
     <div id="conditions-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;font-size:11px;margin-top:10px"></div>
-    <div id="hit-probability" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.08)"></div>
+    <div id="hit-probability" class="ck-hide" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.08)"></div>
   </div>
 </div>
 
@@ -423,7 +423,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-02.44";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-03.45";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -1462,8 +1462,8 @@ function bucketProbsFromMembers(maxes, buckets, kernelStd) {
 // =============================================================================
 // Render
 // =============================================================================
-function makeStat({label, value, unit, sub, tone}) {
-  return `<div class="stat"><label>${label}</label>
+function makeStat({label, value, unit, sub, tone, cls}) {
+  return `<div class="stat${cls ? " " + cls : ""}"><label>${label}</label>
     <div><span class="v${tone?" "+tone:""}">${value}</span>${unit?`<span class="u">${unit}</span>`:""}</div>
     ${sub?`<div class="sub">${sub}</div>`:""}</div>`;
 }
@@ -1642,7 +1642,7 @@ function renderProjection() {
     makeStat({ label: "Proj. high", value: median.toFixed(2), unit: "°F",
       sub: `rounds to ${rounded}° · bucket ${bucketLo}–${bucketHi}`, tone: "accent" }),
     makeStat({ label: "80% range", value: `${proj.p10.toFixed(1)}–${proj.p90.toFixed(1)}`, unit: "°F",
-      sub: "10th–90th pct" }),
+      sub: "10th–90th pct", cls: "ck-hide" }),
     makeStat({ label: "Time of high", value: peakBest,
       sub: `range ${peakTxt}`, tone: "muted" }),
   ].join("");
@@ -1846,9 +1846,9 @@ function renderCouncilStrip(proj) {
 
   el.innerHTML = `<div style="margin-top:9px;padding-top:7px;border-top:1px solid rgba(255,255,255,0.08)">
     <div style="font-size:10px;letter-spacing:0.8px;color:#7e8ea4;margin-bottom:4px">MODEL COUNCIL · day max by model</div>
-    <div>${chips}<span style="font-size:10px;color:#94a2b4;margin-left:4px">median ${cn.median.toFixed(1)}° · spread ${cn.spread != null ? cn.spread.toFixed(1) : "—"}°</span></div>
+    <div>${chips}<span class="ck-hide" style="font-size:10px;color:#94a2b4;margin-left:4px">median ${cn.median.toFixed(1)}° · spread ${cn.spread != null ? cn.spread.toFixed(1) : "—"}°</span></div>
     ${flag}
-    <div style="margin-top:4px;font-size:9px;line-height:1.5;color:#56657a">${nudge} · obs-climb still overrides as the day develops · <span style="color:#7e8ea4">${gradeLine}</span></div>
+    <div class="ck-hide" style="margin-top:4px;font-size:9px;line-height:1.5;color:#56657a">${nudge} · obs-climb still overrides as the day develops · <span style="color:#7e8ea4">${gradeLine}</span></div>
   </div>`;
 }
 
@@ -1966,7 +1966,7 @@ function renderStatus() {
   else if (state.loading) { dot.className="dot load"; label.textContent="loading"; }
   else if (state.modelStaleMin != null) { dot.className="dot load"; label.textContent=`model cached ${state.modelStaleMin < 90 ? Math.round(state.modelStaleMin) + "m" : (state.modelStaleMin / 60).toFixed(1) + "h"}`; }
   else { dot.className="dot live"; label.textContent="live"; }
-  fetchAge.textContent = (state.lastFetch ? `fetched ${Math.floor((Date.now()-state.lastFetch)/1000)}s ago · ` : "") + APP_BUILD;
+  fetchAge.innerHTML = (state.lastFetch ? `fetched ${Math.floor((Date.now()-state.lastFetch)/1000)}s ago` : "") + `<span class="ck-hide"> · ${APP_BUILD}</span>`;
   mem.textContent = state.nMembers ? `${state.nMembers} ens members` : "deterministic only";
   if (state.error) { errEl.style.display="block"; errEl.className="err-box"; errEl.textContent=`! ${state.error}`; }
   else errEl.style.display="none";
