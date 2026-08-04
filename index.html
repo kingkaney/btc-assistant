@@ -423,7 +423,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-03.45";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-03.46";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -1761,7 +1761,7 @@ function renderProjection() {
           <span>${median.toFixed(2)}°F proj high</span>
         </div>
         ${hsr.ambiguous
-          ? `<div style="margin-top:8px;padding:7px 9px;background:rgba(248,113,113,0.10);border-left:2px solid #f87171;border-radius:4px;font-size:9px;line-height:1.5;color:#fca5a5">⚠ Whole-°C reading: this is <b>${hsr.nC}°C</b>, not a precise temp. The official CLI rounds the hidden <i>tenths</i>, which settle <b>${hsr.range}°</b> — can't tell which from this feed. The naive round (${hsr.settles}°) is just one end. Cross-check the NWS 6-hour ob or CLISEA for the real number.</div>${sixHrHintHtml()}`
+          ? `<div class="ck-hide" style="margin-top:8px;padding:7px 9px;background:rgba(248,113,113,0.10);border-left:2px solid #f87171;border-radius:4px;font-size:9px;line-height:1.5;color:#fca5a5">⚠ Whole-°C reading: this is <b>${hsr.nC}°C</b>, not a precise temp. The official CLI rounds the hidden <i>tenths</i>, which settle <b>${hsr.range}°</b> — can't tell which from this feed. The naive round (${hsr.settles}°) is just one end. Cross-check the NWS 6-hour ob or CLISEA for the real number.</div>${sixHrHintHtml()}`
           : hsr.gap
             ? `<div style="margin-top:8px;padding:7px 9px;background:rgba(248,113,113,0.10);border-left:2px solid #f87171;border-radius:4px;font-size:9px;line-height:1.45;color:#fca5a5">⚠ Rounding gap: whole-°C feeds (and the obs text list) read <b>${hsr.wholeCF}°</b>, but the precise reading settles <b>${hsr.settles}°</b> on the official CLI — trust ${hsr.settles}°.</div>`
             : ""}
@@ -4275,7 +4275,7 @@ function sixHrHintHtml() {
   const s = preciseTodayBest();
   if (!s) return "";
   const tStr = new Date(s.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
-  return `<div style="margin-top:6px;padding:7px 9px;background:rgba(52,211,153,0.08);border-left:2px solid #34d399;border-radius:4px;font-size:9px;line-height:1.5;color:#a7f3d0">✓ Precise lane (${s.src}, ${tStr}): <b>${s.c.toFixed(1)}°C = ${s.f.toFixed(1)}°F</b> → settle floor <b>${Math.round(s.f)}°</b>.</div>`;
+  return `<div class="ck-hide" style="margin-top:6px;padding:7px 9px;background:rgba(52,211,153,0.08);border-left:2px solid #34d399;border-radius:4px;font-size:9px;line-height:1.5;color:#a7f3d0">✓ Precise lane (${s.src}, ${tStr}): <b>${s.c.toFixed(1)}°C = ${s.f.toFixed(1)}°F</b> → settle floor <b>${Math.round(s.f)}°</b>.</div>`;
 }
 
 // =============================================================================
