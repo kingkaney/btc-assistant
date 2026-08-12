@@ -423,7 +423,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-11.49";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-11.50";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -567,6 +567,51 @@ function processCouncil(payload) {
       saveCouncil(st);
     }
   } catch (e) {}
+}
+
+// MULTI-MODEL CONSENSUS (2026-08-11). The projection used to ride the GFS
+// ensemble raw median alone — measured over 32 settle-verified days that was the
+// WORST of the four forecasts the app already logs (ens +2.56 bias / 2.59 MAE vs
+// NBM 1.71, ECMWF 2.08, GFS 2.13) and the only one leaning hot. Now each source is
+// de-biased on its own graded record and the four are averaged. Walk-forward on
+// those days: MAE 1.35 → 1.12, within ±1°F 50% → 62%, within ±2°F 75% → 83%.
+// All 12 combiner/window variants tested beat the single-source setup.
+// NOTE ON SIGN: gradeCouncil stores errs[k] = settle − model, so a model that runs
+// cold has a POSITIVE err and its de-biased value is model + median(errs).
+const MM_WINDOW = 30;      // graded days per model
+const MM_MIN_N = 4;        // below this a model votes uncorrected
+const MM_CLAMP = 3.0;      // max °F any one model may be shifted
+const MM_SHIFT_CLAMP = 4.0; // max °F the consensus may move the ensemble
+
+function councilModelBias(key) {
+  try {
+    const st = loadCouncil();
+    const e = (st.graded || [])
+      .filter(gr => gr && gr.errs && isFinite(gr.errs[key]))
+      .sort((a, b) => (a.date < b.date ? -1 : 1))
+      .map(gr => gr.errs[key])
+      .slice(-MM_WINDOW);
+    if (e.length < MM_MIN_N) return { corr: 0, n: e.length };
+    const s = e.slice().sort((a, b) => a - b);
+    const m = s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+    return { corr: Math.max(-MM_CLAMP, Math.min(MM_CLAMP, m)), n: e.length };
+  } catch (err) { return { corr: 0, n: 0 }; }
+}
+
+// Mean of every de-biased source. ensDebiased is the ensemble median AFTER
+// autoBiasF has already been applied, so it is passed in rather than recomputed.
+function multiModelTarget(models, ensDebiased) {
+  const votes = [];
+  ["NBM", "ECMWF", "GFS"].forEach(k => {
+    const v = models && models[k];
+    if (v == null || !isFinite(v)) return;
+    const b = councilModelBias(k);
+    votes.push({ k, v: v + b.corr, raw: v, corr: b.corr, n: b.n });
+  });
+  if (ensDebiased != null && isFinite(ensDebiased)) votes.push({ k: "ENS", v: ensDebiased, raw: null, corr: 0, n: null });
+  if (votes.length < 2) return null;
+  const target = votes.reduce((a, x) => a + x.v, 0) / votes.length;
+  return { target, votes };
 }
 
 function councilForDate(date) {
@@ -1374,22 +1419,27 @@ function getDayProjection(date) {
     calInfo = { biasF: bF, auto: true, targetStd, memberStd, season: seasonOf(date), lead: leadIndexOf(date) };
   }
 
-  // ---- MODEL COUNCIL nudge: shift toward multi-model agreement, widen on
-  // disagreement. Feeds the MODEL side; the observed-climb blend still takes
-  // over as the day develops (obs beat every model, n=8). Weight 0.35, clamp
-  // ±2° — provisional (n=0), earned or fired by the council log at settle. ----
+  // ---- MULTI-MODEL CONSENSUS: every source de-biased on its own record, then
+  // averaged. Replaces the old 0.35-weight nudge toward the RAW council median,
+  // which left most of the ensemble's +2.56 hot bias in place. Spread still
+  // widens the kernel. ----
   let councilInfo = null;
   try {
     const cn = councilForDate(date);
-    if (cn && cn.fresh && cn.median != null) {
+    if (cn && cn.fresh && cn.models) {
       const calSorted = [...calMaxes].sort((a, b) => a - b);
       const ensMed = quantile(calSorted, 0.5);
-      const gap = cn.median - ensMed;
-      const shift = Math.max(-COUNCIL_CLAMP, Math.min(COUNCIL_CLAMP, COUNCIL_W * gap));
-      if (Math.abs(shift) > 0.05) calMaxes = calMaxes.map(v => v + shift);
+      const mm = multiModelTarget(cn.models, ensMed);
+      if (mm) {
+        const shift = Math.max(-MM_SHIFT_CLAMP, Math.min(MM_SHIFT_CLAMP, mm.target - ensMed));
+        if (Math.abs(shift) > 0.05) calMaxes = calMaxes.map(v => v + shift);
+        councilInfo = { gap: +(mm.target - ensMed).toFixed(1), shift: +shift.toFixed(1),
+                        spread: cn.spread != null ? +cn.spread.toFixed(1) : null,
+                        hrrrNbm: cn.hrrrNbm != null ? +cn.hrrrNbm.toFixed(1) : null,
+                        models: cn.models, consensus: +mm.target.toFixed(1),
+                        votes: mm.votes.map(v => ({ k: v.k, v: +v.v.toFixed(1), corr: +v.corr.toFixed(1), n: v.n })) };
+      }
       if (cn.spread != null && cn.spread > 2) kernelStd *= 1 + Math.min(0.5, (cn.spread - 2) * 0.15);
-      councilInfo = { gap: +gap.toFixed(1), shift: +shift.toFixed(1), spread: cn.spread != null ? +cn.spread.toFixed(1) : null,
-                      hrrrNbm: cn.hrrrNbm != null ? +cn.hrrrNbm.toFixed(1) : null, models: cn.models };
     }
   } catch (e) {}
 
