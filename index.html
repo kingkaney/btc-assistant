@@ -307,18 +307,19 @@
 
 <!-- RADAR / WIND / CLOUD MAP -->
 <div class="panel" id="map-panel">
-  <div class="panel-head"><span>Radar · Wind · Cloud</span><span class="accent" id="map-status">loading map…</span></div>
+  <div class="panel-head"><span>Radar · Wind · Cloud · Temps</span><span class="accent" id="map-status">loading map…</span></div>
   <div class="panel-body">
     <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
       <button id="layer-radar" onclick="toggleMapLayer('radar')" class="map-btn">Radar</button>
       <button id="layer-wind" onclick="toggleMapLayer('wind')" class="map-btn on">Wind</button>
       <button id="layer-cloud" onclick="toggleMapLayer('cloud')" class="map-btn on">Cloud</button>
+      <button id="layer-temps" onclick="toggleMapLayer('temps')" class="map-btn">Temps</button>
       <div style="flex:1"></div>
       <button id="radar-play" onclick="radarPlayToggle()" class="map-btn" style="display:none">▶ play</button>
     </div>
     <div id="ksea-map" style="height:300px;border-radius:8px;overflow:hidden;background:#0f1d3d"></div>
     <div id="radar-time" style="font-size:10px;color:#94a2b4;margin-top:6px;text-align:center;font-variant-numeric:tabular-nums"></div>
-    <div style="font-size:9px;color:#9ca3af;margin-top:6px;line-height:1.5">Radar = precipitation (won't show dry marine stratus). Wind arrows point the way air is moving — watch for onshore SW flow. Cloud shading is model cloud-cover, which does capture the marine layer. Satellite loops were dropped by RainViewer's free tier Jan 2026.</div>
+    <div style="font-size:9px;color:#9ca3af;margin-top:6px;line-height:1.5">Radar = precipitation (won't show dry marine stratus). Wind arrows point the way air is moving — watch for onshore SW flow. Cloud shading is model cloud-cover, which does capture the marine layer. Satellite loops were dropped by RainViewer's free tier Jan 2026. Temps plots every Synoptic station within 25 mi — the same thermal field the lead-station heralds read, shown whole. It only fetches while the layer is on and the panel is open, so it stays off your token's rate limit.</div>
   </div>
 </div>
 
@@ -423,7 +424,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-11.50";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-12.51";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -7813,8 +7814,9 @@ function renderAccLogStatus() {
 const MAP = {
   map: null, base: null,
   radarFrames: [], radarLayers: {}, radarIdx: 0, radarTimer: null, radarHost: "",
-  windGroup: null, cloudGroup: null,
-  on: { radar: false, wind: true, cloud: true },
+  windGroup: null, cloudGroup: null, tempGroup: null,
+  tempsAt: 0, tempsErr: null, tempsN: 0, tempsTimer: null,
+  on: { radar: false, wind: true, cloud: true, temps: false },
   inited: false,
 };
 
@@ -7835,6 +7837,7 @@ function initMap() {
     renderStationDots();
     MAP.windGroup = L.layerGroup();
     MAP.cloudGroup = L.layerGroup();
+    MAP.tempGroup = L.layerGroup();
     if (MAP.on.wind) MAP.windGroup.addTo(MAP.map);
     if (MAP.on.cloud) MAP.cloudGroup.addTo(MAP.map);
     setTimeout(() => { try { MAP.map.invalidateSize(); } catch(e){} }, 250);
@@ -8075,6 +8078,75 @@ async function loadWindCloud() {
   } catch (e) { console.warn("wind/cloud load failed:", e); }
 }
 
+// ── TEMPS LAYER (2026-08-12) ── every Synoptic station within 25 mi of KSEA,
+// coloured by temperature. Same endpoint the viewer site uses; the app already
+// holds the token. Deliberately lazy: only fetches while the layer is ON and the
+// map panel is expanded, and no more than once every 2 minutes — the leads poll
+// and the 5-min lane already share this token and a 403 costs the whole day.
+function tempColor(f) {
+  const stops = [[50,"#3b82f6"],[58,"#22d3ee"],[64,"#34d399"],[70,"#a3e635"],
+                 [76,"#fbbf24"],[82,"#fb923c"],[88,"#ef4444"],[95,"#b91c1c"]];
+  if (f <= stops[0][0]) return stops[0][1];
+  for (let i = 1; i < stops.length; i++) {
+    if (f <= stops[i][0]) return stops[i][1];
+  }
+  return stops[stops.length - 1][1];
+}
+
+function mapPanelOpen() {
+  const p = document.getElementById("map-panel");
+  return !!p && !p.classList.contains("collapsed");
+}
+
+async function loadTempStations(force) {
+  if (!MAP.map || !MAP.tempGroup) return;
+  if (!MAP.on.temps || !mapPanelOpen()) return;
+  const tok = (typeof getSynopticToken === "function") ? getSynopticToken() : null;
+  if (!tok) { MAP.tempsErr = "needs a Synoptic token"; renderTempStatus(); return; }
+  const now = Date.now();
+  if (!force && MAP.tempsAt && now - MAP.tempsAt < 120000) return;
+  MAP.tempsAt = now;
+  try {
+    const url = `https://api.synopticdata.com/v2/stations/latest?radius=KSEA,25&vars=air_temp`
+      + `&units=temp|F&within=90&status=active&obtimezone=utc&token=${tok}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    if (!r.ok || (j && j.SUMMARY && j.SUMMARY.RESPONSE_CODE === 2)) throw new Error((j && j.SUMMARY && j.SUMMARY.RESPONSE_MESSAGE) || ("HTTP " + r.status));
+    MAP.tempGroup.clearLayers();
+    let n = 0;
+    (j.STATION || []).forEach(st => {
+      const ob = st.OBSERVATIONS && st.OBSERVATIONS.air_temp_value_1;
+      const f = ob && typeof ob.value === "number" ? ob.value : null;
+      const la = parseFloat(st.LATITUDE), lo = parseFloat(st.LONGITUDE);
+      if (f == null || !isFinite(la) || !isFinite(lo)) return;
+      const ageM = ob.date_time ? Math.round((Date.now() - Date.parse(ob.date_time)) / 60000) : null;
+      const isKsea = st.STID === "KSEA";
+      const col = tempColor(f);
+      const icon = L.divIcon({ className: "", iconSize: [30, 18], iconAnchor: [15, 9],
+        html: `<div style="background:${col};color:#0b1020;font-size:10px;font-weight:800;`
+            + `border-radius:4px;text-align:center;line-height:18px;`
+            + `border:${isKsea ? "2px solid #fff" : "1px solid rgba(0,0,0,0.35)"};`
+            + `box-shadow:0 1px 3px rgba(0,0,0,0.5)">${Math.round(f)}</div>` });
+      L.marker([la, lo], { icon, zIndexOffset: isKsea ? 1000 : 0 }).addTo(MAP.tempGroup)
+        .bindPopup(`<b>${st.STID}</b> ${st.NAME || ""}<br>${f.toFixed(1)}°F`
+                   + (ageM != null ? ` · ${ageM}m ago` : ""));
+      n++;
+    });
+    MAP.tempsN = n; MAP.tempsErr = null;
+  } catch (e) {
+    MAP.tempsErr = String((e && e.message) || e);
+  }
+  renderTempStatus();
+}
+
+function renderTempStatus() {
+  const el = document.getElementById("radar-time");
+  if (!el || !MAP.on.temps) return;
+  el.textContent = MAP.tempsErr
+    ? `temps: ${MAP.tempsErr}`
+    : `${MAP.tempsN} stations within 25 mi · updates every 2 min while open`;
+}
+
 function toggleMapLayer(which) {
   MAP.on[which] = !MAP.on[which];
   const btn = document.getElementById("layer-" + which);
@@ -8091,6 +8163,17 @@ function toggleMapLayer(which) {
     if (MAP.on.wind) MAP.windGroup.addTo(MAP.map); else MAP.map.removeLayer(MAP.windGroup);
   } else if (which === "cloud") {
     if (MAP.on.cloud) MAP.cloudGroup.addTo(MAP.map); else MAP.map.removeLayer(MAP.cloudGroup);
+  } else if (which === "temps") {
+    if (MAP.on.temps) {
+      MAP.tempGroup.addTo(MAP.map);
+      loadTempStations(true);
+      if (!MAP.tempsTimer) MAP.tempsTimer = setInterval(() => { loadTempStations().catch(() => {}); }, 120000);
+    } else {
+      MAP.map.removeLayer(MAP.tempGroup);
+      if (MAP.tempsTimer) { clearInterval(MAP.tempsTimer); MAP.tempsTimer = null; }
+      const t = document.getElementById("radar-time");
+      if (t && !MAP.on.radar) t.textContent = "";
+    }
   }
 }
 
