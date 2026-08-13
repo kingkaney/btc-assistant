@@ -424,7 +424,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-12.51";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-12.52";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -8249,8 +8249,10 @@ setInterval(() => fetchDSMBackfill(), 1_800_000); // …every 30 min
 setTimeout(() => fetchBlip(), 4000);      // 1-min archive backfill: after first paint…
 setInterval(() => fetchBlip(), 1_800_000); // …then every 30 min (archive lags days anyway)
 setInterval(() => pollLive1m(), 15_000);
-setInterval(() => pollKrnt1m(), 15_000);
-pollKrnt1m();
+// KRNT1M auto-poll retired 2026-08-12: it was hitting Synoptic every 15s for a
+// station that settles nothing (direction canary only), and the lane has been
+// dead since 2026-07-30. The manual ↻ links in the panel still poll on demand,
+// and krntUseSynoptic() still fires one fetch when a URL is saved.
 setInterval(() => { try { renderCollapse(); } catch (e) {} }, 15_000);
 setInterval(() => { poll5m().catch(() => {}); }, 60_000);
 poll5m().catch(() => {});
