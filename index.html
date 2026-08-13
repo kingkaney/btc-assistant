@@ -269,9 +269,9 @@
   <div class="panel-head"><span>📶 Live 1-Min Feed</span><span class="accent" id="live1m-status">off</span></div>
   <div class="panel-body" id="live1m-body"></div>
 </div>
-<!-- KRNT 1-MIN: Renton Municipal, ~7mi ENE inland. The burn-off canary — it clears and warms before SEA does. -->
+<!-- KRNT 5-MIN: Renton Municipal, ~7mi ENE inland. The burn-off canary — it clears and warms before SEA does. -->
 <div class="panel" id="krnt1m-panel">
-  <div class="panel-head"><span>📶 KRNT 1-Min (Renton)</span><span class="accent" id="krnt1m-status">off</span></div>
+  <div class="panel-head"><span>📶 KRNT 5-Min (Renton)</span><span class="accent" id="krnt1m-status">off</span></div>
   <div class="panel-body" id="krnt1m-body"></div>
 </div>
 <!-- COLLAPSE DECODER: the F->C->F display trap, decoded live. decimal -> direction, hold-time -> lean, :53 T-group -> answer. -->
@@ -444,7 +444,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-12.53";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-12.54";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -5908,7 +5908,7 @@ function renderKrnt1m() {
     const hasTok = typeof getSynopticToken === "function" && getSynopticToken();
     body.innerHTML = `<div style="font-size:11px;color:#94a2b4;line-height:1.6">${
       hasTok
-        ? `Renton 1-min lane ready — <a href="#" onclick="krntUseSynoptic();return false" style="color:#34d399;font-weight:600">▶ connect KRNT1M now</a> (uses your saved token).`
+        ? `Renton lane ready — <a href="#" onclick="krntUseSynoptic();return false" style="color:#34d399;font-weight:600">▶ connect KRNT1M now</a> (uses your saved token).`
         : `Sleeping — save a Synoptic token in Live Conditions first, then a connect button appears here.`
     }</div>`;
     if (statusEl) { statusEl.textContent = "off"; statusEl.style.color = "#94a2b4"; }
@@ -5966,7 +5966,6 @@ function renderKrnt1m() {
       <div style="font-size:10px;color:#94a2b4;line-height:1.45">${hero ? "latest" : "LAST KNOWN (no fresh lane)"} · ${ageMin}m ago${maxPt ? `<br>max today <b style="color:#fcd34d">${maxPt.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(maxPt.f)}°C</b> @ ${new Date(maxPt.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" })}` : ""}</div>
     </div>
     ${deltaHtml}
-    ${staleTagHtml(a1, "KRNT 1-min")}
     ${hero && hero.src === "5-min" ? "" : fiveMinRowHtml(loadKrnt5(), "KRNT")}
     ${s.tg ? `<div style="margin-top:6px;padding:4px 8px;background:rgba(147,197,253,0.07);border-left:2px solid #93c5fd;border-radius:4px;font-size:10px;color:#cdd9e8">truth check — KRNT T-group <b style="color:#93c5fd">${s.tg.c.toFixed(1)}°C</b> = <b>${s.tg.f.toFixed(1)}°F</b> @ ${new Date(s.tg.ms).toLocaleTimeString("en-US",{timeZone:TZ,hour:"numeric",minute:"2-digit"})} · next ~${nextRevealStr()}</div>` : `<div style="margin-top:6px;font-size:9.5px;color:#94a2b4">truth check: no KRNT T-group seen yet (hourlies post ~:53) · next ~${nextRevealStr()}</div>`}
     <div style="margin-top:6px;font-size:9px;color:#56657a;line-height:1.5">whole-°C lane like KSEA1M — direction canary only; KSEA settles the market. ${todayPts.length} pts today · <a href="#" onclick="pollKrnt1m(true);return false" style="color:#60a5fa">↻</a></div>`;
@@ -6275,6 +6274,9 @@ function renderLive1m() {
   const statusEl = document.getElementById("live1m-status");
   if (!bodyEl) return;
   const s = loadL1M();
+  // Relay URL is config, not status — only surfaced when the feed needs attention
+  // (nothing configured yet, or the relay is erroring). Once it's running the
+  // panel shows readings, not plumbing.
   const urlRow = `<div style="display:flex;align-items:center;gap:7px;font-size:10px;color:#94a2b4;margin-bottom:7px">
     <span>relay URL</span><input type="url" placeholder="http://… (Termux relay)" value="${s.url || ""}"
       onchange="l1mSetUrl(this.value)"
@@ -6299,7 +6301,7 @@ function renderLive1m() {
   }
   if (!pts.length) {
     if (statusEl) statusEl.textContent = "waiting";
-    bodyEl.innerHTML = urlRow + `<div style="font-size:11px;color:#94a2b4">Connected — waiting for points. <a href="#" onclick="pollLive1m(true);return false" style="color:#60a5fa">↻ poll now</a></div>`;
+    bodyEl.innerHTML = `<div style="font-size:11px;color:#94a2b4">Connected — waiting for points. <a href="#" onclick="pollLive1m(true);return false" style="color:#60a5fa">↻ poll now</a></div>`;
     return;
   }
 
@@ -6333,7 +6335,7 @@ function renderLive1m() {
   }
   const tStr = mx ? new Date(mx.t).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }) : "";
 
-  let html = urlRow;
+  let html = "";   // feed is live — no config row
   html += `<div style="display:flex;gap:14px;font-size:12px;color:#eef3fa;font-variant-numeric:tabular-nums">
     <span>latest <b style="color:#fcd34d">${last.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(last.f)}°C</b> <span style="color:#7e8ea4;font-size:10px">${ageMin.toFixed(0)}m ago</span>${hero && hero.src === "5-min" ? ` <b style="color:#a78bfa;font-size:10px">5-MIN lane</b>` : (hero ? "" : ` <b style="color:#f87171;font-size:10px">no fresh lane</b>`)}</span>
     ${mx ? `<span>max today <b style="color:#fcd34d">${mx.f.toFixed(1)}°</b> <b style="color:#93c5fd">${fToC1(mx.f)}°C</b> <span style="color:#7e8ea4;font-size:10px">@ ${tStr}</span></span>` : ""}</div>`;
