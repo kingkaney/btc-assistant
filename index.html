@@ -4,7 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a1530">
-<title>KSEA Forecast · High Projection</title>
+<title>GatePulse° · KSEA High-Frequency Live Data</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {
@@ -44,8 +47,25 @@
     margin: 0 0 6px;
     position: relative;
   }
-  .station-id { font-size: 10px; letter-spacing: 0.28em; color: #8ba0bd; text-transform: uppercase; }
-  .header h1 { font-size: 20px; font-weight: 600; color: #f4f7fb; margin-top: 4px; letter-spacing: -0.01em; }
+  /* Wordmark. The degree sign is the mark, not punctuation — it's the product,
+     so it carries the same amber the app uses for every temperature reading. */
+  .header h1 {
+    font-family: "Space Grotesk", "Segoe UI", Roboto, system-ui, sans-serif;
+    font-size: 30px; font-weight: 700; color: #f4f7fb;
+    letter-spacing: -0.02em; line-height: 1;
+  }
+  .header h1 .deg {
+    color: #fbbf24; font-weight: 500; font-size: 0.62em;
+    vertical-align: super; margin-left: 1px; letter-spacing: 0;
+  }
+  .station-id {
+    font-size: 9.5px; letter-spacing: 0.24em; color: #8ba0bd;
+    text-transform: uppercase; margin-top: 6px; font-weight: 500;
+  }
+  @media (max-width: 380px) {
+    .header h1 { font-size: 26px; }
+    .station-id { font-size: 8.5px; letter-spacing: 0.18em; }
+  }
   .clock { font-size: 13px; color: #cdd9e8; font-variant-numeric: tabular-nums; text-align: right; }
   .clock-tz { font-size: 10px; color: #8ba0bd; letter-spacing: 0.15em; text-align: right; }
 
@@ -141,8 +161,8 @@
 
 <div class="header">
   <div>
-    <div class="station-id">KSEA · Sea-Tac Intl<span class="ck-hide"> · 47.45N 122.31W</span></div>
-    <h1>High Projection</h1>
+    <h1>GatePulse<span class="deg">°</span></h1>
+    <div class="station-id">KSEA · High-Frequency Live Data</div>
   </div>
   <div>
     <div class="clock" id="clock">--:--:--</div>
@@ -424,7 +444,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-12.52";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-12.53";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
