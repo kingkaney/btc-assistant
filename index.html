@@ -450,7 +450,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-14.60";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-14.61";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -2260,6 +2260,43 @@ function computeHitProbability() {
 const PACE_CURVE = { 6: 0.014, 7: 0.071, 8: 0.151, 9: 0.250, 10: 0.362, 11: 0.471, 12: 0.597, 13: 0.707, 14: 0.808, 15: 0.884, 16: 0.933, 17: 0.971, 18: 0.938 };
 const PACE_MIN_FRAC = 0.25;   // don't invert below this
 
+// Empirical spread of the implied high vs what the day actually did, per hour,
+// as 41 quantiles (p0…p100, base36 tenths, +40°F offset). Fit on 1691 Jul/Aug
+// days. Residual sd collapses through the day: 10.3°F at 9 AM → 7.1 at 10 →
+// 4.2 at noon → 2.5 at 2 PM → 1.6 at 4 PM. Leave-one-year-out calibration is
+// close to the diagonal — 10 AM: says 40-50% hits 45%, says 60-70% hits 66%;
+// 3 PM: says 10-20% hits 15%, says 90-100% hits 90%.
+const PACE_RESID_RAW = "9:3464747o848d8m8x949b9m9oa4a4adamaob2b4bbbibmbrc0c4c9ckcmctd4d4dhdmdre4e9emf0fmghzz|10:587y8d8l8y959b9j9r9va0a7abahalapaub0b5babfbkbmbtbyc3c7cccgclcqcud2dcdhdqdye8eqfai4|11:5v8p92989h9m9q9wa2a5a7abafajaoaqatawb0b6b8bbbdbhblbqbtbwc0c4cbcecicrcxd2dfdke0ekhb|12:7b9e9o9va0a3a8aaafagakalaparauaxaxb1b3b5b8b9bdbfbiblbpbrbwbyc3c8c9cfckcocxd4dge2gn|13:829r9xa3a8acaeahajamaoaratavawayazb1b2b4b6b9b9bbbdbfbibjbmbpbsbvbyc2c4cacgcocwddge|14:94a2a9acafaiakamaoaparatatawawayazb1b2b3b6b6b7babbbcbebfbhbjblbobsbubwc1c4c8cgcogr|15:a1acafaiakamaoapaqaratauavawayayb0b1b3b3b5b6b7b8b9babcbcbebfbgbjblbnbobrbubyc4cahp|16:ahalamanaoapaqarasatauauavawaxayb0b1b3b4b4b5b7b7b8b8b9babbbcbdbebfbhbkbnbqbubwc3ht";
+let PACE_RESID = null;
+function paceResid(h) {
+  if (!PACE_RESID) {
+    PACE_RESID = {};
+    PACE_RESID_RAW.split("|").forEach(seg => {
+      const i = seg.indexOf(":"); const hh = +seg.slice(0, i), body = seg.slice(i + 1);
+      const q = [];
+      for (let k = 0; k * 2 < body.length; k++) q.push(a36(body.substr(k * 2, 2)) / 10 - 40);
+      PACE_RESID[hh] = q;
+    });
+  }
+  return PACE_RESID[h] || null;
+}
+// P(actual max ≥ x) given the implied high, straight off the quantile ladder
+function paceProbAtLeast(implied, x, h) {
+  const q = paceResid(h);
+  if (!q) return null;
+  const need = x - implied;
+  let c = 0;
+  q.forEach(r => { if (r >= need) c++; });
+  return c / q.length;
+}
+function paceProbBucket(implied, lo, h) {
+  const q = paceResid(h);
+  if (!q) return null;
+  let c = 0;
+  q.forEach(r => { const v = implied + r; if (v >= lo - 0.5 && v < lo + 1.5) c++; });
+  return c / q.length;
+}
+
 function renderPaceTrack() {
   const body = document.getElementById("pace-track-body");
   const statusEl = document.getElementById("pace-track-status");
@@ -2322,6 +2359,27 @@ function renderPaceTrack() {
     head += `<div style="font-size:10.5px;color:#94a2b4;margin-top:2px">this pace implies a high near `
       + `<b style="color:${Math.abs(d) <= 1.5 ? "#34d399" : "#fbbf24"}">${implied.toFixed(1)}°</b>`
       + ` <span style="color:#7e8ea4">(${d >= 0 ? "+" : ""}${d.toFixed(1)}° vs target)</span></div>`;
+    // odds of actually getting there, from the measured spread of this hour's implied high
+    const pHour = paceResid(nowH) ? nowH : (paceResid(nowH - 1) ? nowH - 1 : null);
+    if (pHour != null) {
+      const tBucket = Math.floor((Math.round(target) - 1) / 2) * 2 + 1;
+      const pAt = paceProbAtLeast(implied, target, pHour);
+      const pBk = paceProbBucket(implied, tBucket, pHour);
+      const q = paceResid(pHour);
+      const cent = [];
+      q.forEach(r => { const b = Math.floor((implied + r - 1) / 2) * 2 + 1; cent[b] = (cent[b] || 0) + 1; });
+      let best = null;
+      Object.keys(cent).forEach(b => { if (!best || cent[b] > cent[best]) best = b; });
+      const pc = v => Math.round(v * 100) + "%";
+      const col = v => v >= 0.5 ? "#34d399" : v >= 0.3 ? "#fbbf24" : "#f87171";
+      head += `<div style="margin-top:6px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.07)">`
+        + `<div style="font-size:9px;letter-spacing:0.6px;color:#7e8ea4;margin-bottom:2px">ODDS FROM THIS PACE · ${q.length ? "1691 past days" : ""}</div>`
+        + `<div style="font-size:11px;line-height:1.6;color:#cdd9e8">`
+        + `reach <b>${target.toFixed(1)}°</b> or higher &nbsp;<b style="color:${col(pAt)}">${pc(pAt)}</b><br>`
+        + `settle in <b>${tBucket}–${tBucket + 1}°</b> &nbsp;<b style="color:${col(pBk)}">${pc(pBk)}</b>`
+        + (best != null ? `<br><span style="color:#7e8ea4">pace's own favourite: <b style="color:#a78bfa">${best}–${+best + 1}°</b> at ${pc(cent[best] / q.length)}</span>` : "")
+        + `</div></div>`;
+    }
   }
   const grS = curGap == null ? null : +curGap.toFixed(1);
   setSt(grS == null ? "—" : (grS > 0 ? "+" : "") + grS.toFixed(1) + "° vs pace",
