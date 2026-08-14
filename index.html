@@ -217,6 +217,12 @@
   </div>
 </div>
 
+<!-- PACE TRACK: what today should read at each hour to land on the projected high -->
+<div class="panel" id="pace-track-panel">
+  <div class="panel-head"><span>📈 Pace to Target</span><span class="accent" id="pace-track-status">—</span></div>
+  <div class="panel-body" id="pace-track-body"><div style="font-size:11px;color:#94a2b4">waiting for today's tape…</div></div>
+</div>
+
 <!-- DRIFT VS FORECAST (intraday nowcast, today only) -->
 <div class="panel" id="drift-panel">
   <div class="panel-head"><span>📡 Tracking vs Forecast</span><span class="accent" id="drift-status">—</span></div>
@@ -444,7 +450,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-14.57";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-14.60";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -2240,6 +2246,91 @@ function computeHitProbability() {
   const paceWord = paceGap > 0.5 ? "ahead of pace" : paceGap < -0.5 ? "behind pace" : "on pace";
   return { pct, label, color,
            reason: `currently ${cur.toFixed(1)}°F, ${gap.toFixed(1)}°F to reach projection · ${paceWord} for the heating window` };
+}
+
+// ============================================================================
+// PACE TO TARGET — what the thermometer should read at each hour to land on the
+// projected high. Fraction-of-climb curve fit on 1672 Jul/Aug days: temp(h) =
+// overnight_min + frac(h) × (target − overnight_min). Measured accuracy of the
+// curve itself against the actual reading: MAE 1.48°F at 8 AM, 2.07 at 10,
+// 1.97 at noon, 1.52 at 2 PM, 1.10 at 4 PM.
+// The implied-high readout inverts it — but only from 9 AM, because before that
+// frac is so small that dividing by it amplifies a 1° wobble into 20°.
+// ============================================================================
+const PACE_CURVE = { 6: 0.014, 7: 0.071, 8: 0.151, 9: 0.250, 10: 0.362, 11: 0.471, 12: 0.597, 13: 0.707, 14: 0.808, 15: 0.884, 16: 0.933, 17: 0.971, 18: 0.938 };
+const PACE_MIN_FRAC = 0.25;   // don't invert below this
+
+function renderPaceTrack() {
+  const body = document.getElementById("pace-track-body");
+  const statusEl = document.getElementById("pace-track-status");
+  if (!body) return;
+  const setSt = (t, c) => { if (statusEl) { statusEl.textContent = t; statusEl.style.color = c || "#94a2b4"; } };
+  const isToday = state.days.length && state.selectedDate === state.days[0].date;
+  if (!isToday) { body.innerHTML = `<div style="font-size:11px;color:#94a2b4">select today to see the pace track.</div>`; setSt("—"); return; }
+  const proj = getDayProjection(state.selectedDate);
+  if (!proj || proj.median == null) { body.innerHTML = `<div style="font-size:11px;color:#94a2b4">waiting for a projection…</div>`; setSt("—"); return; }
+  const target = proj.median;
+
+  let pts = [];
+  try { const l = freshestKseaLane(90); pts = (l && l.pts) ? l.pts.slice() : []; } catch (e) {}
+  try { (loadF5().points || []).forEach(p => pts.push(p)); } catch (e) {}
+  const today = ptDateOf(Date.now());
+  pts = pts.filter(p => p && isFinite(p.f) && ptDateOf(p.t) === today);
+  if (pts.length < 3) { body.innerHTML = `<div style="font-size:11px;color:#94a2b4">not enough of today's tape yet.</div>`; setSt("—"); return; }
+  const lowF = Math.min(...pts.map(p => p.f));
+  const nowMin = ptMinutesOf(Date.now()), nowH = Math.floor(nowMin / 60);
+  const at = h => {
+    let best = null, bd = 41;
+    pts.forEach(p => { const d = Math.abs(ptMinutesOf(p.t) - h * 60); if (d < bd) { bd = d; best = p.f; } });
+    return best;
+  };
+  const hours = Object.keys(PACE_CURVE).map(Number).sort((a, b) => a - b);
+  let rows = "", curGap = null, implied = null;
+  hours.forEach(h => {
+    const frac = PACE_CURVE[h];
+    const want = lowF + frac * (target - lowF);
+    const got = at(h);
+    const future = h > nowH;
+    const gap = got != null ? got - want : null;
+    if (got != null && h <= nowH) {
+      curGap = gap;
+      if (frac >= PACE_MIN_FRAC) implied = lowF + (got - lowF) / frac;
+    }
+    const col = gap == null ? "#56657a" : Math.abs(gap) <= 1.5 ? "#34d399" : gap > 0 ? "#fbbf24" : "#60a5fa";
+    const lbl = (h > 12 ? h - 12 : h) + (h >= 12 ? " PM" : " AM");
+    rows += `<div style="display:flex;gap:6px;padding:1px 0;font-size:10.5px;`
+      + `${h === nowH ? "background:rgba(251,191,36,0.10);border-radius:3px;" : ""}`
+      + `color:${future ? "#56657a" : "#cdd9e8"}">`
+      + `<span style="flex:0 0 46px">${lbl}</span>`
+      + `<span style="flex:0 0 46px;text-align:right">${want.toFixed(1)}°</span>`
+      + `<span style="flex:0 0 46px;text-align:right;color:${future ? "#56657a" : "#eef3fa"}">${got != null ? got.toFixed(1) + "°" : "—"}</span>`
+      + `<span style="flex:1;text-align:right;color:${col};font-weight:${h === nowH ? 700 : 400}">`
+      + `${gap == null ? "" : ((+gap.toFixed(1)) > 0 ? "+" : "") + (+gap.toFixed(1)).toFixed(1)}</span></div>`;
+  });
+  let head = `<div style="font-size:11px;color:#cdd9e8;line-height:1.5">`
+    + `target <b style="color:#fbbf24">${target.toFixed(1)}°</b> · today's low <b>${lowF.toFixed(1)}°</b>`;
+  if (curGap != null) {
+    const gr = +curGap.toFixed(1);          // round first: -0.04 must not read "behind"
+    head += gr === 0
+      ? ` · <b style="color:#34d399">on pace</b>`
+      : ` · running <b style="color:${Math.abs(gr) <= 1.5 ? "#34d399" : gr > 0 ? "#fbbf24" : "#60a5fa"}">`
+        + `${Math.abs(gr).toFixed(1)}° ${gr > 0 ? "ahead of" : "behind"}</b> pace`;
+  }
+  head += `</div>`;
+  if (implied != null) {
+    const d = +(implied - target).toFixed(1) || 0;   // avoid printing "-0.0"
+    head += `<div style="font-size:10.5px;color:#94a2b4;margin-top:2px">this pace implies a high near `
+      + `<b style="color:${Math.abs(d) <= 1.5 ? "#34d399" : "#fbbf24"}">${implied.toFixed(1)}°</b>`
+      + ` <span style="color:#7e8ea4">(${d >= 0 ? "+" : ""}${d.toFixed(1)}° vs target)</span></div>`;
+  }
+  const grS = curGap == null ? null : +curGap.toFixed(1);
+  setSt(grS == null ? "—" : (grS > 0 ? "+" : "") + grS.toFixed(1) + "° vs pace",
+        grS == null ? "#94a2b4" : Math.abs(grS) <= 1.5 ? "#34d399" : grS > 0 ? "#fbbf24" : "#60a5fa");
+  const hdr = `<div style="display:flex;gap:6px;font-size:8.5px;letter-spacing:0.5px;color:#56657a;margin-top:6px;padding-bottom:2px">`
+    + `<span style="flex:0 0 46px">HOUR</span><span style="flex:0 0 46px;text-align:right">TARGET</span>`
+    + `<span style="flex:0 0 46px;text-align:right">ACTUAL</span><span style="flex:1;text-align:right">GAP</span></div>`;
+  body.innerHTML = head + hdr + rows
+    + `<div style="margin-top:5px;font-size:9px;color:#56657a">curve fit on 1672 July/August days · it predicts the hour's reading to ~1.1–2.1°F, so gaps under about 1.5° are noise · target follows the projection as it updates</div>`;
 }
 
 function renderConditions() {
@@ -6876,7 +6967,7 @@ function renderAll() {
   // missing day object silently killed everything after it in this list.
   const seq = [
     renderStatus, renderDayStrip, renderProjection, renderAICall, renderDrift,
-    renderBackup, renderBlip, renderLive1m, renderKrnt1m, renderCollapse, renderConditions,
+    renderBackup, renderBlip, renderLive1m, renderKrnt1m, renderCollapse, renderConditions, renderPaceTrack,
     renderNearbyStations, renderSynopticStations, renderStationDots,
     renderNowcast, renderPace, renderSpeci, renderInsights, renderSixHr, renderDSM, renderCheckpoint, renderTrust, renderLeadStn, renderFeeds,
     renderSkycams, renderChart, renderCurrent,
