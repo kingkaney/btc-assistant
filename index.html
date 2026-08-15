@@ -450,7 +450,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-14.61";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-14.63";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -460,6 +460,18 @@ const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&lon
   + `&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=${TZ}&forecast_days=7`;
 const ENSEMBLE_URL = `https://ensemble-api.open-meteo.com/v1/ensemble?latitude=${LAT}&longitude=${LON}`
   + `&hourly=temperature_2m&models=gfs_seamless&temperature_unit=fahrenheit&timezone=${TZ}&forecast_days=7`;
+
+// ---- CACHE BUSTING (2026-08-14) ------------------------------------------------
+// These model URLs are byte-identical on every call, so Chrome was serving them
+// from its own disk cache — for HOURS. On 2026-08-13 the 06z run published at
+// 2:26 AM, the market repriced on it immediately, and the app kept replaying a
+// cached response until ~9 AM with the app OPEN the whole time. "fetched 264s ago"
+// measured when fetchAll() RAN, not when a fresh payload arrived, so the header
+// looked healthy the entire time. Every model fetch now carries a unique param
+// AND cache:"no-store". Note the URLs already have query strings — append with &.
+const NOCACHE = { cache: "no-store" };
+function bust(u) { return u + (u.indexOf("?") >= 0 ? "&" : "?") + "_=" + Date.now(); }
+// ------------------------------------------------------------------------------
 
 // ---- MODEL COUNCIL: HRRR (3km rapid-refresh, sees the marine deck physically),
 // ECMWF IFS, NBM (what NWS point forecasts — and therefore the market anchor —
@@ -489,7 +501,7 @@ const hrrrUrl = id => `https://api.open-meteo.com/v1/gfs?latitude=${LAT}&longitu
 async function fetchHrrr() {
   for (const id of HRRR_IDS) {
     try {
-      const r = await fetch(hrrrUrl(id));
+      const r = await fetch(bust(hrrrUrl(id)), NOCACHE);
       const j = await r.json();
       if (!r.ok || (j && j.error)) continue;
       if (j && j.hourly && Array.isArray(j.hourly.time)) { j._omId = id; return j; }
@@ -500,7 +512,7 @@ async function fetchHrrr() {
 
 async function fetchCouncil() {
   const tryFetch = async models => {
-    const r = await fetch(councilUrl(models));
+    const r = await fetch(bust(councilUrl(models)), NOCACHE);
     const j = await r.json();
     if (j && j.error) throw new Error(j.reason || "council request rejected");
     if (!r.ok) throw new Error("council " + r.status);
@@ -749,8 +761,8 @@ const MODEL_CACHE_KEY = "ksea_model_cache_v1";
 
 async function fetchAll() {
   const [fRes, eRes, cRes] = await Promise.allSettled([
-    fetch(FORECAST_URL).then(r => { if (!r.ok) throw new Error("forecast " + r.status); return r.json(); }),
-    fetch(ENSEMBLE_URL).then(r => { if (!r.ok) throw new Error("ensemble " + r.status); return r.json(); }),
+    fetch(bust(FORECAST_URL), NOCACHE).then(r => { if (!r.ok) throw new Error("forecast " + r.status); return r.json(); }),
+    fetch(bust(ENSEMBLE_URL), NOCACHE).then(r => { if (!r.ok) throw new Error("ensemble " + r.status); return r.json(); }),
     fetchCouncil(),
   ]);
 
@@ -2081,7 +2093,16 @@ function renderStatus() {
   else if (state.loading) { dot.className="dot load"; label.textContent="loading"; }
   else if (state.modelStaleMin != null) { dot.className="dot load"; label.textContent=`model cached ${state.modelStaleMin < 90 ? Math.round(state.modelStaleMin) + "m" : (state.modelStaleMin / 60).toFixed(1) + "h"}`; }
   else { dot.className="dot live"; label.textContent="live"; }
-  fetchAge.innerHTML = (state.lastFetch ? `fetched ${Math.floor((Date.now()-state.lastFetch)/1000)}s ago` : "") + `<span class="ck-hide"> · ${APP_BUILD}</span>`;
+  // age of the DATA, not of the call — a cached response used to read "fetched 12s ago"
+  let ageTxt = "", ageCol = "";
+  if (state.lastFetch) {
+    const callS = Math.floor((Date.now() - state.lastFetch) / 1000);
+    let dataMin = null;
+    try { if (state.lastModelChange) dataMin = Math.floor((Date.now() - state.lastModelChange) / 60000); } catch (e) {}
+    ageTxt = `fetched ${callS}s ago`;
+    if (dataMin != null && dataMin >= 90) { ageTxt += ` · data ${Math.floor(dataMin / 60)}h stale`; ageCol = "color:#fbbf24;"; }
+  }
+  fetchAge.innerHTML = `<span style="${ageCol}">${ageTxt}</span><span class="ck-hide"> · ${APP_BUILD}</span>`;
   mem.textContent = state.nMembers ? `${state.nMembers} ens members` : "deterministic only";
   if (state.error) { errEl.style.display="block"; errEl.className="err-box"; errEl.textContent=`! ${state.error}`; }
   else errEl.style.display="none";
@@ -2281,20 +2302,25 @@ function paceResid(h) {
   return PACE_RESID[h] || null;
 }
 // P(actual max ≥ x) given the implied high, straight off the quantile ladder
-function paceProbAtLeast(implied, x, h) {
+// floorF = the day's max so far. The final high can never come in under a
+// temperature the station has already recorded, so every candidate outcome is
+// floored there before the odds are counted. Without it the panel could say
+// "20% chance of reaching 77" on a day that had already printed 77 (2026-08-14).
+function paceOutcomes(implied, h, floorF) {
   const q = paceResid(h);
   if (!q) return null;
-  const need = x - implied;
-  let c = 0;
-  q.forEach(r => { if (r >= need) c++; });
-  return c / q.length;
+  const fl = (floorF == null || !isFinite(floorF)) ? -Infinity : floorF;
+  return q.map(r => Math.max(implied + r, fl));
 }
-function paceProbBucket(implied, lo, h) {
-  const q = paceResid(h);
-  if (!q) return null;
-  let c = 0;
-  q.forEach(r => { const v = implied + r; if (v >= lo - 0.5 && v < lo + 1.5) c++; });
-  return c / q.length;
+function paceProbAtLeast(implied, x, h, floorF) {
+  const o = paceOutcomes(implied, h, floorF);
+  if (!o) return null;
+  return o.filter(v => v >= x).length / o.length;
+}
+function paceProbBucket(implied, lo, h, floorF) {
+  const o = paceOutcomes(implied, h, floorF);
+  if (!o) return null;
+  return o.filter(v => v >= lo - 0.5 && v < lo + 1.5).length / o.length;
 }
 
 function renderPaceTrack() {
@@ -2315,6 +2341,7 @@ function renderPaceTrack() {
   pts = pts.filter(p => p && isFinite(p.f) && ptDateOf(p.t) === today);
   if (pts.length < 3) { body.innerHTML = `<div style="font-size:11px;color:#94a2b4">not enough of today's tape yet.</div>`; setSt("—"); return; }
   const lowF = Math.min(...pts.map(p => p.f));
+  const maxF = Math.max(...pts.map(p => p.f));   // already banked — a hard floor
   const nowMin = ptMinutesOf(Date.now()), nowH = Math.floor(nowMin / 60);
   const at = h => {
     let best = null, bd = 41;
@@ -2345,7 +2372,7 @@ function renderPaceTrack() {
       + `${gap == null ? "" : ((+gap.toFixed(1)) > 0 ? "+" : "") + (+gap.toFixed(1)).toFixed(1)}</span></div>`;
   });
   let head = `<div style="font-size:11px;color:#cdd9e8;line-height:1.5">`
-    + `target <b style="color:#fbbf24">${target.toFixed(1)}°</b> · today's low <b>${lowF.toFixed(1)}°</b>`;
+    + `target <b style="color:#fbbf24">${target.toFixed(1)}°</b> · low <b>${lowF.toFixed(1)}°</b> · max so far <b style="color:#eef3fa">${maxF.toFixed(1)}°</b>`;
   if (curGap != null) {
     const gr = +curGap.toFixed(1);          // round first: -0.04 must not read "behind"
     head += gr === 0
@@ -2355,6 +2382,7 @@ function renderPaceTrack() {
   }
   head += `</div>`;
   if (implied != null) {
+    if (implied < maxF) implied = maxF;             // can't imply a high below what already happened
     const d = +(implied - target).toFixed(1) || 0;   // avoid printing "-0.0"
     head += `<div style="font-size:10.5px;color:#94a2b4;margin-top:2px">this pace implies a high near `
       + `<b style="color:${Math.abs(d) <= 1.5 ? "#34d399" : "#fbbf24"}">${implied.toFixed(1)}°</b>`
@@ -2363,11 +2391,11 @@ function renderPaceTrack() {
     const pHour = paceResid(nowH) ? nowH : (paceResid(nowH - 1) ? nowH - 1 : null);
     if (pHour != null) {
       const tBucket = Math.floor((Math.round(target) - 1) / 2) * 2 + 1;
-      const pAt = paceProbAtLeast(implied, target, pHour);
-      const pBk = paceProbBucket(implied, tBucket, pHour);
-      const q = paceResid(pHour);
+      const pAt = paceProbAtLeast(implied, target, pHour, maxF);
+      const pBk = paceProbBucket(implied, tBucket, pHour, maxF);
+      const q = paceOutcomes(implied, pHour, maxF) || [];
       const cent = [];
-      q.forEach(r => { const b = Math.floor((implied + r - 1) / 2) * 2 + 1; cent[b] = (cent[b] || 0) + 1; });
+      q.forEach(v => { const b = Math.floor((v - 1) / 2) * 2 + 1; cent[b] = (cent[b] || 0) + 1; });
       let best = null;
       Object.keys(cent).forEach(b => { if (!best || cent[b] > cent[best]) best = b; });
       const pc = v => Math.round(v * 100) + "%";
@@ -2375,7 +2403,8 @@ function renderPaceTrack() {
       head += `<div style="margin-top:6px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.07)">`
         + `<div style="font-size:9px;letter-spacing:0.6px;color:#7e8ea4;margin-bottom:2px">ODDS FROM THIS PACE · ${q.length ? "1691 past days" : ""}</div>`
         + `<div style="font-size:11px;line-height:1.6;color:#cdd9e8">`
-        + `reach <b>${target.toFixed(1)}°</b> or higher &nbsp;<b style="color:${col(pAt)}">${pc(pAt)}</b><br>`
+        + `reach <b>${target.toFixed(1)}°</b> or higher &nbsp;<b style="color:${col(pAt)}">${pc(pAt)}</b>`
+        + (maxF >= target ? ` <span style="color:#34d399;font-size:9px">already there</span>` : "") + `<br>`
         + `settle in <b>${tBucket}–${tBucket + 1}°</b> &nbsp;<b style="color:${col(pBk)}">${pc(pBk)}</b>`
         + (best != null ? `<br><span style="color:#7e8ea4">pace's own favourite: <b style="color:#a78bfa">${best}–${+best + 1}°</b> at ${pc(cent[best] / q.length)}</span>` : "")
         + `</div></div>`;
@@ -7483,6 +7512,12 @@ async function refresh() {
     await fetchAll();
     state.error = null;
     state.lastFetch = Date.now();
+    // track when the payload last actually CHANGED, so a frozen feed can't hide
+    try {
+      const sig = JSON.stringify((main && main.hourly && main.hourly.temperature_2m) ? main.hourly.temperature_2m.slice(0, 12) : null);
+      if (sig && sig !== state.lastModelSig) { state.lastModelSig = sig; state.lastModelChange = Date.now(); }
+      else if (!state.lastModelChange) state.lastModelChange = Date.now();
+    } catch (e) {}
     checkAlerts();
     logCalibrationObs();
     logCloseInObs();
