@@ -451,7 +451,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-14.65";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-15.67";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -3760,6 +3760,38 @@ function renderLeadStn() {
 // heat days, shown when each cell has n≥4. No narratives are generated.
 // =============================================================================
 const HRRR_VALID_FROM = "2026-07-15";
+// Day → regime, rebuilt from the synoptic station log (which carries KSEA's own
+// cloud % and wind on every row). Uses the same cuts as dayRegime(), so Component
+// Trust, the checkpoint adjustment and the nowcast offsets all agree on what kind
+// of day it was. Afternoon rows only — that's when the regime actually bites.
+function trustRegimeByDate() {
+  const byDay = {};
+  try {
+    (synLogRead() || []).forEach(r => {
+      if (r.windMph == null || r.hour == null || r.hour < 11 || r.hour > 18) return;
+      const d = (r.kseaTime || "").slice(0, 10) || (r.t ? ptDateOf(r.t) : null);
+      if (!d) return;
+      (byDay[d] = byDay[d] || []).push(r);
+    });
+  } catch (e) {}
+  const out = {};
+  Object.keys(byDay).forEach(d => {
+    const rows = byDay[d];
+    const med = a => a.slice().sort((x, y) => x - y)[Math.floor(a.length / 2)];
+    const ws = med(rows.map(r => r.windMph).filter(x => x != null));
+    const cl = rows.map(r => r.cloud).filter(x => x != null);
+    const cloud = cl.length ? med(cl) : null;
+    if (ws == null) return;
+    let k;
+    if (ws >= 13) k = "windy";
+    else if (cloud != null && cloud < 25 && ws < 5) k = "clearlight";
+    else if (cloud != null && cloud >= 25) k = "marine";
+    else k = "other";
+    out[d] = k;
+  });
+  return out;
+}
+
 function componentTrust() {
   const settles = {};
   try { Object.values((loadCLI().products) || {}).forEach(p => { if (p && p.final && p.date && isFinite(p.max)) settles[p.date] = p.max; }); } catch (e) {}
@@ -3785,9 +3817,10 @@ function componentTrust() {
       if (T && isFinite(s.tF)) add(s.key === "t10" ? "Ckpt 10AM" : "Ckpt noon", s.date, Math.round(s.tF + T.med));
     });
   } catch (e) {}
+  const regByDate = trustRegimeByDate();
   const out = {};
   Object.keys(comps).forEach(name => {
-    const errs = Object.keys(comps[name]).sort().map(d => ({ d, e: +(comps[name][d] - settles[d]).toFixed(1), sky: sky[d] || null, hot: settles[d] >= 80 }));
+    const errs = Object.keys(comps[name]).sort().map(d => ({ d, e: +(comps[name][d] - settles[d]).toFixed(1), sky: sky[d] || null, hot: settles[d] >= 80, reg: regByDate[d] || null }));
     const v = errs.map(x => x.e), n = v.length;
     if (!n) return;
     const cell = a => ({ n: a.length, mae: a.length ? a.reduce((s, x) => s + Math.abs(x), 0) / a.length : null, bias: a.length ? a.reduce((s, x) => s + x, 0) / a.length : null });
@@ -3796,9 +3829,44 @@ function componentTrust() {
       w1: 100 * v.filter(x => Math.abs(x) <= 1).length / n, last: errs.slice(-5),
       clr: cell(errs.filter(x => x.sky === "CLR").map(x => x.e)), ovc: cell(errs.filter(x => x.sky === "OVC").map(x => x.e)),
       hot: cell(errs.filter(x => x.hot).map(x => x.e)), cool: cell(errs.filter(x => !x.hot).map(x => x.e)),
+      reg: ["clearlight", "marine", "windy", "other"].reduce((acc, k) => {
+        acc[k] = cell(errs.filter(x => x.reg === k).map(x => x.e)); return acc;
+      }, {}),
     };
   });
   return out;
+}
+
+// MAE per component per regime. Cells with n<4 stay blank rather than printing a
+// number one bad day could flip — with ~35 graded days a four-way split leaves
+// about 9 per cell, so this earns trust slowly and says so.
+const TRUST_REG_MIN_N = 4;
+function regimeMatrixHtml(ranked, t) {
+  try {
+    const cols = [["clearlight", "clear+lt"], ["marine", "marine"], ["windy", "windy"], ["other", "mixed"]];
+    const live = cols.filter(([k]) => ranked.some(nm => (t[nm].reg || {})[k] && t[nm].reg[k].n >= TRUST_REG_MIN_N));
+    if (live.length < 2) return "";
+    let h = `<div style="margin-top:6px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.08)">`
+      + `<div style="font-size:10px;letter-spacing:0.5px;color:#7e8ea4;margin-bottom:2px">MAE BY REGIME (n≥${TRUST_REG_MIN_N})</div>`
+      + `<div style="display:flex;gap:5px;font-size:8.5px;letter-spacing:0.4px;color:#56657a;white-space:nowrap">`
+      + `<span style="flex:0 0 64px"></span>`
+      + live.map(([, lab]) => `<span style="flex:1;text-align:right">${lab.toUpperCase()}</span>`).join("") + `</div>`;
+    ranked.slice(0, 6).forEach(nm => {
+      const r = t[nm].reg || {};
+      // best regime for this component gets the green
+      let best = null;
+      live.forEach(([k]) => { const c = r[k]; if (c && c.n >= TRUST_REG_MIN_N && (!best || c.mae < r[best].mae)) best = k; });
+      h += `<div style="display:flex;gap:5px;padding:1px 0;font-size:10px;color:#cdd9e8;white-space:nowrap">`
+        + `<span style="flex:0 0 64px;overflow:hidden;text-overflow:ellipsis">${nm}</span>`
+        + live.map(([k]) => {
+            const c = r[k];
+            if (!c || c.n < TRUST_REG_MIN_N) return `<span style="flex:1;text-align:right;color:#56657a">—</span>`;
+            return `<span style="flex:1;text-align:right;color:${k === best ? "#34d399" : "#cdd9e8"}">`
+              + `${c.mae.toFixed(1)}<span style="color:#56657a;font-size:8.5px">/${c.n}</span></span>`;
+          }).join("") + `</div>`;
+    });
+    return h + `<div style="font-size:8.5px;color:#56657a;margin-top:2px">green = that component's own best regime · blank = fewer than ${TRUST_REG_MIN_N} graded days yet</div></div>`;
+  } catch (e) { return ""; }
 }
 
 function renderTrust() {
@@ -3841,6 +3909,7 @@ function renderTrust() {
       why.push(`${nm}: ${sgn(c.clr.bias)}° on clear mornings (n=${c.clr.n}) vs ${sgn(c.ovc.bias)}° overcast (n=${c.ovc.n})`);
   });
   if (why.length) {
+    h += regimeMatrixHtml(ranked, t);
     h += `<div style="margin-top:6px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.08);font-size:10px;letter-spacing:0.5px;color:#7e8ea4">WHY THEY MISS (measured splits, n≥4 per cell)</div>`;
     why.slice(0, 3).forEach(w => { h += `<div style="font-size:9.5px;color:#cdd9e8;line-height:1.4">· ${w}</div>`; });
     if (why.length > 3) h += `<div style="font-size:9px;color:#56657a">+${why.length - 3} more measured</div>`;
@@ -7677,9 +7746,31 @@ const NOWCAST_MIN_N = 8;     // paired samples a station needs in a block before
 function ncBlock(hour) { return Math.floor(((hour == null ? 12 : hour) % 24) / 3); }
 
 // offset sample = kseaTemp - stationTemp  ->  estimate = liveStationTemp + offset
+// Regime split for the offset model. Measured on 2025-26 Jul/Aug afternoons, the
+// east stations sit FURTHER above KSEA on clear + light-wind days and are also
+// STEADIER there — so a single blended offset is wrong in both directions:
+//     G3137  clear+light +3.60 (MAD 1.01)   other +2.81 (MAD 1.21)
+//     C2224  clear+light +3.20 (MAD 0.99)   other +2.20 (MAD 1.21)
+//     F7625  clear+light +3.60 (MAD 1.21)   other +2.20 (MAD 1.40)
+//     D1735  clear+light -0.59 (MAD 0.99)   other -0.79 (MAD 0.81)   ← not an east-warm station
+// The fix is a regime-conditional OFFSET, not a hand-set weight. Weight is already
+// 1/MAD in ncEstimate(), which is the correct criterion — a station earns weight by
+// being steady, not by being warm — and warmth is what the offset is for. Splitting
+// the offset makes each vote land right AND tightens its MAD, so the weighting
+// improves on its own. Learned as a DELTA pooled across all blocks, because
+// clear+light is only ~6% of afternoon samples and a fully split bin would
+// almost never reach NOWCAST_MIN_N.
+const NC_REGIME_MIN_N = 12;    // paired samples before a station's delta is used
+function ncRowRegime(r) {
+  if (r.windMph == null) return null;
+  if (r.windMph >= 13) return "windy";
+  if (r.cloud != null && r.cloud < 25 && r.windMph < 5) return "clearlight";
+  return "other";
+}
+
 function ncLearnOffsets() {
   const rows = synLogRead();
-  const m = {};
+  const m = {}, reg = {};
   for (const r of rows) {
     if (r.temp == null || r.kseaTemp == null || (r.ageMin == null ? 99 : r.ageMin) > 25) continue;
     const off = r.kseaTemp - r.temp;
@@ -7687,15 +7778,33 @@ function ncLearnOffsets() {
     const b = ncBlock(r.hour);
     (m[r.sid] = m[r.sid] || {});
     (m[r.sid][b] = m[r.sid][b] || []).push(off);
+    const rg = ncRowRegime(r);
+    if (rg) { (reg[r.sid] = reg[r.sid] || {}); (reg[r.sid][rg] = reg[r.sid][rg] || []).push(off); }
   }
+  const med = a => a.length ? a.slice().sort((x, y) => x - y)[Math.floor(a.length / 2)] : null;
+  // per-station deviation of each regime from that station's own overall offset
+  const delta = {};
+  Object.keys(reg).forEach(sid => {
+    const all = [];
+    Object.keys(reg[sid]).forEach(k => all.push(...reg[sid][k]));
+    const base = med(all);
+    delta[sid] = {};
+    Object.keys(reg[sid]).forEach(k => {
+      const v = reg[sid][k];
+      if (v.length >= NC_REGIME_MIN_N) {
+        const d = med(v) - base;
+        delta[sid][k] = { d: Math.max(-4, Math.min(4, d)), n: v.length };
+      }
+    });
+  });
   const out = {};
   Object.keys(m).forEach(sid => {
-    out[sid] = {};
+    out[sid] = { _delta: delta[sid] || {} };
     Object.keys(m[sid]).forEach(b => {
       const a = m[sid][b].slice(-400).sort((x, y) => x - y);
-      const med = a[Math.floor(a.length / 2)];
-      const mad = a.map(v => Math.abs(v - med)).sort((x, y) => x - y)[Math.floor(a.length / 2)] || 0.5;
-      out[sid][b] = { off: med, mad, n: a.length };
+      const md = a[Math.floor(a.length / 2)];
+      const mad = a.map(v => Math.abs(v - md)).sort((x, y) => x - y)[Math.floor(a.length / 2)] || 0.5;
+      out[sid][b] = { off: md, mad, n: a.length };
     });
   });
   return out;
@@ -7722,8 +7831,16 @@ function ncEstimate() {
     if (age > 25) continue;
     const ob = offsets[s.id] ? offsets[s.id][b] : null;
     if (!ob || ob.n < NOWCAST_MIN_N) continue;
-    votes.push({ sid: s.id, est: s.tempF + ob.off, w: 1 / Math.max(0.25, ob.mad),
-                 off: ob.off, mad: ob.mad, n: ob.n, age: Math.round(age) });
+    // regime nudge on this station's own offset — see ncLearnOffsets
+    let rd = 0, rk = null;
+    try {
+      const rg = dayRegime();
+      rk = rg ? (rg.key === "clearlight" ? "clearlight" : rg.key === "windy" ? "windy" : "other") : null;
+      const dd = rk && offsets[s.id]._delta ? offsets[s.id]._delta[rk] : null;
+      if (dd) rd = dd.d;
+    } catch (e) {}
+    votes.push({ sid: s.id, est: s.tempF + ob.off + rd, w: 1 / Math.max(0.25, ob.mad),
+                 off: ob.off, rd: +rd.toFixed(2), rk, mad: ob.mad, n: ob.n, age: Math.round(age) });
   }
   if (votes.length < 3) return { ready: false, votes };
   votes.sort((a, c) => a.est - c.est);
