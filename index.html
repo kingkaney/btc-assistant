@@ -189,6 +189,7 @@
     <div class="stat-grid cols-2" id="proj-stats"><div style="color:#94a2b4">loading ensemble…</div></div>
     <div id="calib-note" style="font-size:10px;color:#94a2b4;margin-top:8px;line-height:1.5"></div>
     <div id="current-ticker" style="margin-top:16px"></div>
+    <div id="regime-tag" style="margin-top:10px"></div>
     <div id="boundary-bar" class="ck-hide" style="margin-top:16px"></div>
   </div>
 </div>
@@ -450,7 +451,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-14.63";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-14.65";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -1776,6 +1777,18 @@ function renderProjection() {
   ].join("");
 
   // Calibration note: show raw → calibrated and what was applied
+  try {
+    const rg = dayRegime();
+    const el = document.getElementById("regime-tag");
+    if (el) {
+      el.innerHTML = rg
+        ? `<span style="font-size:9px;letter-spacing:0.5px;color:#7e8ea4">TODAY'S REGIME </span>`
+          + `<b style="font-size:10.5px;color:${rg.key === "clearlight" ? "#fbbf24" : rg.key === "marine" || rg.key === "windy" ? "#60a5fa" : "#a78bfa"}">${rg.label}</b>`
+          + `<span style="font-size:9px;color:#56657a"> · ${Math.round(rg.ws)} mph ${["N","NE","E","SE","S","SW","W","NW"][Math.round(((rg.wd % 360) / 45)) % 8]}`
+          + `${rg.clear == null ? "" : rg.clear ? " · clear" : " · cloud"}</span>`
+        : "";
+    }
+  } catch (e) {}
   const calibNoteEl = document.getElementById("calib-note");
   if (calibNoteEl) {
     if (proj.calibrated && proj.calInfo) {
@@ -4375,8 +4388,64 @@ function renderCheckpoint() {
 // the checkpoint's OWN graded snaps. Error is recomputed from the stored anchor
 // and sky against the shipped table median, so the correction always trains on
 // RAW table error — never on its own corrected output (no feedback loop).
-// Per key: t10 and t12 drift differently (t10 ran -2.46°, t12 -2.02° over n=32).
-// Walk-forward on those graded snaps: t10 MAE 3.95 → 3.27, t12 2.88 → 2.39.
+// Per key: t10 and t12 drift differently (t10 now runs -2.90°, t12 -2.23° over n=35).
+// Clamp widened ±3 → ±5 on 2026-08-14: the correction was pinned at its ceiling
+// every day (last-12 median error is about -4.8/-4.5), so it could never remove
+// the bias it had correctly measured. Walk-forward sweep, window 12:
+//   t10  raw 4.26 → ±3: 3.46 → ±5: 3.33   (benefit plateaus at ±5)
+//   t12  raw 3.02 → ±3: 2.56 → ±5: 2.50
+// KNOWN LIMIT, not fixed by the clamp: on days that settle under 78 the
+// correction overshoots the other way (+1.7 t10 / +1.0 t12) because it has no
+// regime awareness. Widening does not make that worse (+1.68 → +1.71).
+const CKPT_CLAMP = 5.0;   // widened from 3.0 on 2026-08-14 — see note above
+
+// ---- DAY REGIME (2026-08-14) --------------------------------------------------
+// Four kinds of day, classified from the live 10 AM-onward wind and sky. Measured
+// on 1458 Jul/Aug archive days — these genuinely separate outcomes:
+//   clear + light   n=97   median high 84.2°F   climb from 10 AM +14.4
+//   N/NW            n=379              80.6                      +13.0
+//   other           n=425              78.8                      +14.0
+//   marine/cloudy   n=514              71.8                      +11.0
+//   strong wind     n=43               71.6                      + 9.2
+// They ALSO shift the checkpoint table's error, which a flat correction can't see:
+//   strong wind +1.74 · marine/cloudy -0.44 · N/NW -1.40 · clear+light -2.50
+// CKPT_REGIME_ADJ below is each regime's DEVIATION from the all-day bias (-1.33),
+// so it composes with the rolling ckptBiasF without double-counting.
+// Walk-forward: flat correction 3.05 → regime-aware 2.96 MAE, bias +0.47 → -0.09.
+// NOTE: regime conditioning helps the CHECKPOINT only. Tested on the model
+// projection and it made things worse (1.12 → 1.19) — do not wire it there.
+const REGIME_LABEL = {
+  clearlight: "clear + light wind",
+  nnw:        "N/NW flow",
+  marine:     "marine / cloudy",
+  windy:      "strong wind (mixing)",
+  other:      "mixed",
+};
+const CKPT_REGIME_ADJ = { windy: 3.07, marine: 0.89, nnw: -0.07, other: -1.06, clearlight: -1.17 };
+
+// Classify from whatever the app currently holds. Returns null if wind is unknown.
+function dayRegime() {
+  try {
+    const c = state.current;
+    if (!c || typeof c.windMph !== "number" || typeof c.windDir !== "number") return null;
+    const ws = c.windMph, wd = c.windDir;
+    let clear = null;
+    try {
+      const ac = (loadSixHr().anyCld) || {};
+      const ks = Object.keys(ac).sort();
+      if (ks.length) clear = ac[ks[ks.length - 1]] === 0;
+    } catch (e) {}
+    if (clear == null && typeof c.cloud === "number") clear = c.cloud < 25;
+    let key;
+    if (ws >= 13) key = "windy";
+    else if (clear === true && ws < 5) key = "clearlight";
+    else if (wd >= 290 || wd < 30) key = "nnw";
+    else if (clear === false && wd >= 135 && wd < 225) key = "marine";
+    else key = "other";
+    return { key, label: REGIME_LABEL[key], ws, wd, clear };
+  } catch (e) { return null; }
+}
+// ------------------------------------------------------------------------------
 function ckptBiasF(key) {
   try {
     const g = loadCkptGrades();
@@ -4390,14 +4459,16 @@ function ckptBiasF(key) {
     if (errs.length < 4) return 0;
     const s = errs.slice().sort((a, b) => a - b);
     const med = s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
-    return Math.max(-3, Math.min(3, med));
+    return Math.max(-CKPT_CLAMP, Math.min(CKPT_CLAMP, med));
   } catch (e) { return 0; }
 }
 
 function ckptSectionHtml(pt, snap, frozen) {
   const T = CHECKPOINT_TABLES[pt.key][snap.sky];
   const cBias = ckptBiasF(pt.key);
-  const call = snap.tF + T.med - cBias;
+  const reg = dayRegime();
+  const rAdj = (reg && CKPT_REGIME_ADJ[reg.key] != null) ? CKPT_REGIME_ADJ[reg.key] : 0;
+  const call = snap.tF + T.med - cBias - rAdj;
   const callSettle = Math.round(call);
   let divergence = "";
   try {
@@ -4411,7 +4482,7 @@ function ckptSectionHtml(pt, snap, frozen) {
   let h = `<div style="margin:6px 0 2px;font-size:11px;color:#eef3fa"><b>${pt.label}</b>: ${snap.tF.toFixed(1)}°F, ${snap.sky === "CLR" ? "clear" : "overcast"}${frozen ? "" : " (sky unknown — showing " + snap.sky + ")"} <span style="color:#7e8ea4">· n=${T.n} July days${frozen ? " · frozen" : ""}</span></div>`;
   h += `<div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin:3px 0 2px">
     <div style="font-size:24px;font-weight:800;color:#eef3fa;font-variant-numeric:tabular-nums">${callSettle}°</div>
-    <div style="font-size:10px;line-height:1.45;color:#94a2b4">checkpoint call (${call.toFixed(1)}°F) · 50% band ${(snap.tF + T.p25 - cBias).toFixed(1)}–${(snap.tF + T.p75 - cBias).toFixed(1)}°F${cBias ? ` · self-corrected ${cBias > 0 ? "−" : "+"}${Math.abs(cBias).toFixed(1)}°` : ""}${divergence}</div>
+    <div style="font-size:10px;line-height:1.45;color:#94a2b4">checkpoint call (${call.toFixed(1)}°F) · 50% band ${(snap.tF + T.p25 - cBias - rAdj).toFixed(1)}–${(snap.tF + T.p75 - cBias - rAdj).toFixed(1)}°F${cBias ? ` · self-corrected ${cBias > 0 ? "−" : "+"}${Math.abs(cBias).toFixed(1)}°` : ""}${rAdj ? ` · ${reg.label} ${rAdj > 0 ? "−" : "+"}${Math.abs(rAdj).toFixed(1)}°` : ""}${divergence}</div>
   </div>`;
   h += `<div class="ck-hide" style="display:flex;flex-wrap:wrap;gap:5px;margin:4px 0 8px">`;
   ckptChips(pt.key, snap.tF, snap.sky).forEach(c => {
@@ -4420,7 +4491,7 @@ function ckptSectionHtml(pt, snap, frozen) {
       <span style="color:#cdd9e8">≥${c.K}°</span> <b style="color:${col}">${Math.round(c.p)}%</b>${c.noisy ? "<span style=\"font-size:8px;color:#7e8ea4\"> noisy</span>" : ""}</div>`;
   });
   h += `</div>`;
-  h += `<div class="ck-hide" style="font-size:9.5px;color:#7e8ea4;margin-bottom:6px">floor: 95% of these days add at least +${T.floor5.toFixed(1)}°F from here → high ≥ ${(snap.tF + T.floor5 - cBias).toFixed(1)}°F is the 5th-percentile line. </div>`;
+  h += `<div class="ck-hide" style="font-size:9.5px;color:#7e8ea4;margin-bottom:6px">floor: 95% of these days add at least +${T.floor5.toFixed(1)}°F from here → high ≥ ${(snap.tF + T.floor5 - cBias - rAdj).toFixed(1)}°F is the 5th-percentile line. </div>`;
   return h;
 }
 
