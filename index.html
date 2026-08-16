@@ -451,7 +451,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-16.68";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-16.69";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -4159,6 +4159,45 @@ function analogSectionHtml(grades, markDirty) {
   } catch (e) { return ""; }
 }
 
+// ============================================================================
+// AFTERNOON FUSION (2026-08-16) — 1 PM to 4 PM only.
+// From 1 PM the thermometer starts carrying information the models don't have.
+// Measured walk-forward on 36 afternoon reads, weights and biases fitted only on
+// prior days:  model consensus alone 1.54 MAE · ladder de-biased 1.56 ·
+// FUSED 0.97  → -37%, and within ±1°F goes 58% → 67%.
+// Both inputs are de-biased on their own graded record first — the raw ladder
+// runs -1.70 cold and fusing that in untreated makes things worse, not better.
+// The blend weight is LEARNED from the app's own paired history (it has settled
+// near 0.25 on the ladder), not hand-set, and falls back to model-only until
+// there are enough paired days to fit one.
+// Deliberately NOT active before 1 PM: every test this month says the model beats
+// observations until early afternoon, and fusing early gives back the gain.
+// ============================================================================
+const FUSE_FROM_HOUR = 13, FUSE_TO_HOUR = 16, FUSE_MIN_PAIRS = 12;
+
+function fusionInputs(grades) {
+  try {
+    const g = grades || loadCkptGrades();
+    const pairs = Object.values(g.ladder || {})
+      .filter(e => e && e.graded && e.proj != null && e.settle != null && e.mod != null
+                   && e.H >= FUSE_FROM_HOUR && e.H <= FUSE_TO_HOUR)
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+    if (pairs.length < FUSE_MIN_PAIRS) return { n: pairs.length, ready: false };
+    const med = a => { const s = a.slice().sort((x, y) => x - y);
+      return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2; };
+    const lb = med(pairs.map(p => p.proj - p.settle));
+    const mb = med(pairs.map(p => p.mod - p.settle));
+    let best = null;
+    for (let i = 0; i <= 20; i++) {
+      const w = i / 20;
+      const e = pairs.reduce((a, p) =>
+        a + Math.abs((1 - w) * (p.mod - mb) + w * (p.proj - lb) - p.settle), 0) / pairs.length;
+      if (!best || e < best.e) best = { e, w };
+    }
+    return { ready: true, n: pairs.length, w: best.w, lb, mb, mae: best.e };
+  } catch (e) { return { ready: false, n: 0 }; }
+}
+
 function ladderSectionHtml(grades, markDirty) {
   try {
     const mins = ptMinutesOf(Date.now());
@@ -4202,6 +4241,27 @@ function ladderSectionHtml(grades, markDirty) {
     h += `<div style="font-size:11px;line-height:1.6;color:#cdd9e8">${H > 12 ? H - 12 : H}${H >= 12 ? " PM" : " AM"} anchor <b>${tH.toFixed(1)}°</b>${paceNote}<br>`
       + `typically adds <b style="color:#fcd34d">+${cell.med.toFixed(1)}°</b> more <span style="color:#7e8ea4">[+${cell.q25.toFixed(1)} to +${cell.q75.toFixed(1)}, p90 +${cell.p90.toFixed(1)}]</span> → projected high ≈ <b style="color:#fcd34d">${proj.toFixed(1)}°</b><br>`
       + `<b style="color:#34d399">${cell.r1}%</b> of days add ≥1 rung (+1.8°) from here · <b style="color:${cell.r2 >= 50 ? "#34d399" : "#fbbf24"}">${cell.r2}%</b> add ≥2 (+3.6°) <span style="color:#7e8ea4">(n=${cell.n})</span></div>`;
+    if (H >= FUSE_FROM_HOUR && H <= FUSE_TO_HOUR) {
+      try {
+        const fi = fusionInputs(grades);
+        let modNow = null;
+        try { const pj = getDayProjection(ptDateOf(Date.now())); if (pj && pj.median != null) modNow = pj.median; } catch (e) {}
+        if (modNow != null) {
+          h += `<div style="margin-top:6px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.07)">`
+            + `<div style="font-size:9.5px;letter-spacing:0.6px;color:#7e8ea4;margin-bottom:2px">⚗️ AFTERNOON FUSION · model + tape</div>`;
+          if (!fi.ready) {
+            h += `<div style="font-size:10px;color:#94a2b4">learning the blend — ${fi.n}/${FUSE_MIN_PAIRS} graded afternoon pairs. Until then this shows the model alone (<b>${modNow.toFixed(1)}°</b>).</div>`;
+          } else {
+            const fused = (1 - fi.w) * (modNow - fi.mb) + fi.w * (proj - fi.lb);
+            h += `<div style="font-size:11px;line-height:1.6;color:#cdd9e8">`
+              + `fused call <b style="color:#34d399;font-size:13px">${fused.toFixed(1)}°</b> `
+              + `<span style="color:#7e8ea4">(model ${(modNow - fi.mb).toFixed(1)}° · tape ${(proj - fi.lb).toFixed(1)}°, tape weight ${Math.round(fi.w * 100)}%)</span><br>`
+              + `<span style="font-size:9px;color:#56657a">weights and both biases fitted on ${fi.n} graded afternoon pairs · live MAE ${fi.mae.toFixed(2)}°</span></div>`;
+          }
+          h += `</div>`;
+        }
+      } catch (e) {}
+    }
     if (H > 12) h += `<div style="font-size:9px;color:#56657a">pace conditioning matters before noon only — by afternoon the terciles converge, so this row is hour-only by design.</div>`;
     if (H <= 7) h += `<div style="font-size:9px;color:#56657a">pre-8 AM rows are hour-only: overnight-level conditioning was tested (warm mornings looked like bigger climbs) but flipped between validation halves — raw odds only this early.</div>`;
     // snap once per date|hour, grade later vs official settle
@@ -4209,7 +4269,9 @@ function ladderSectionHtml(grades, markDirty) {
       grades.ladder = grades.ladder || {};
       const key = ptDateOf(Date.now()) + "|" + H;
       if (!grades.ladder[key]) {
-        grades.ladder[key] = { date: ptDateOf(Date.now()), H, tF: +tH.toFixed(1), proj: +proj.toFixed(1), at: Date.now() };
+        let modNow = null;
+        try { const pj = getDayProjection(ptDateOf(Date.now())); if (pj && pj.median != null) modNow = +pj.median.toFixed(1); } catch (e) {}
+        grades.ladder[key] = { date: ptDateOf(Date.now()), H, tF: +tH.toFixed(1), proj: +proj.toFixed(1), mod: modNow, at: Date.now() };
         if (markDirty) markDirty();
       }
     } catch (e) {}
