@@ -451,7 +451,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-15.67";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-16.68";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -8321,6 +8321,14 @@ function logAccuracySnapshot() {
   // autoBiasF() returns 0 and an UNCALIBRATED row stays locked all day — Aug 14
   // logged biasF 0 when it should have been +2.00. Hold off while it's early;
   // after 9 AM stamp regardless so no day ever goes unlogged.
+  // Hold the day's row until BOTH conditions are sane. The 2026-08-14 guard waited
+  // for auto-bias data but not for a sensible hour — CLI landed just after midnight
+  // on 08-15 and froze that day's row at snapHour 0.3, on overnight model data,
+  // before the 06z or 12z runs. Since the row is never rewritten, that midnight
+  // number then feeds autoBiasF and Component Trust as if it were a morning lock.
+  // Now: no stamp before 7 AM at all, and after that still wait for calibration
+  // data until 9, when it stamps regardless so a day can never go unlogged.
+  if (!log[today.date] && pacHour < 7) return;
   if (!log[today.date] && CALIB.enabled && !autoBiasReady() && pacHour < 9) return;
   const rec = log[today.date] || {
     date: today.date,
