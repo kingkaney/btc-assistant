@@ -451,7 +451,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-16.72";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-17.73";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -2322,7 +2322,8 @@ function paceResid(h) {
 function paceOutcomes(implied, h, floorF) {
   const q = paceResid(h);
   if (!q) return null;
-  const fl = (floorF == null || !isFinite(floorF)) ? -Infinity : floorF;
+  // Floor on the LOWER twin — a whole-°C display of 80.6 only guarantees 80.
+  const fl = (floorF == null || !isFinite(floorF)) ? -Infinity : settleFloorOf(floorF);
   return q.map(r => Math.max(implied + r, fl));
 }
 function paceProbAtLeast(implied, x, h, floorF) {
@@ -2338,6 +2339,32 @@ function paceProbAtLeast(implied, x, h, floorF) {
 function bucketOf(f) {
   const s = Math.round(f);
   return Math.floor((s - 1) / 2) * 2 + 1;
+}
+
+// A reading off the whole-°C lane is NOT one temperature — the F→C→round→F chain
+// collapses two adjacent true whole-°F onto one display value. 80.6°F is exactly
+// 27.0°C, and both 80°F (26.67C) and 81°F (27.22C) round to 27.0, so 80.6 means
+// "80 or 81" — which straddles bucket 79–80 AND 81–82. Rounding it to 81 and
+// calling that bucket 85% was wrong (reported twice, 2026-08-16).
+// Returns the candidate whole-°F settles for a display value, low first.
+function displayTwins(f) {
+  const fToC = x => (x - 32) * 5 / 9, cToF = c => c * 9 / 5 + 32;
+  const dispOf = x => +cToF(Math.round(fToC(x))).toFixed(1);
+  const out = [];
+  for (let tf = Math.round(f) - 2; tf <= Math.round(f) + 2; tf++) {
+    if (Math.abs(dispOf(tf) - f) < 0.05) out.push(tf);
+  }
+  return out.length ? out : [Math.round(f)];
+}
+// True only when a value sits exactly on a whole-°C display step.
+function isWholeCDisplay(f) {
+  const c = (f - 32) * 5 / 9;
+  return Math.abs(c - Math.round(c)) < 0.02;
+}
+// Conservative settle floor: the LOWER twin. A display of 80.6 guarantees 80,
+// not 81 — so a banked max of 80.6 must not lock the odds into 81–82.
+function settleFloorOf(f) {
+  return isWholeCDisplay(f) ? displayTwins(f)[0] : Math.round(f);
 }
 
 function paceProbBucket(implied, lo, h, floorF) {
@@ -2395,7 +2422,9 @@ function renderPaceTrack() {
       + `${gap == null ? "" : ((+gap.toFixed(1)) > 0 ? "+" : "") + (+gap.toFixed(1)).toFixed(1)}</span></div>`;
   });
   let head = `<div style="font-size:11px;color:#cdd9e8;line-height:1.5">`
-    + `target <b style="color:#fbbf24">${target.toFixed(1)}°</b> · low <b>${lowF.toFixed(1)}°</b> · max so far <b style="color:#eef3fa">${maxF.toFixed(1)}°</b>`;
+    + `target <b style="color:#fbbf24">${target.toFixed(1)}°</b> · low <b>${lowF.toFixed(1)}°</b> · max so far <b style="color:#eef3fa">${maxF.toFixed(1)}°</b>`
+    + (isWholeCDisplay(maxF) && displayTwins(maxF).length > 1
+        ? ` <span style="color:#fbbf24;font-size:9.5px">(whole-°C — true ${displayTwins(maxF).join(" or ")}°, only the :53 T-group tells them apart)</span>` : "");
   if (curGap != null) {
     const gr = +curGap.toFixed(1);          // round first: -0.04 must not read "behind"
     head += gr === 0
@@ -2427,7 +2456,7 @@ function renderPaceTrack() {
         + `<div style="font-size:9px;letter-spacing:0.6px;color:#7e8ea4;margin-bottom:2px">ODDS FROM THIS PACE · ${q.length ? "1691 past days" : ""}</div>`
         + `<div style="font-size:11px;line-height:1.6;color:#cdd9e8">`
         + `reach <b>${target.toFixed(1)}°</b> or higher &nbsp;<b style="color:${col(pAt)}">${pc(pAt)}</b>`
-        + (maxF >= target ? ` <span style="color:#34d399;font-size:9px">already there</span>` : "") + `<br>`
+        + (settleFloorOf(maxF) >= Math.round(target) ? ` <span style="color:#34d399;font-size:9px">already there</span>` : "") + `<br>`
         + `settle in <b>${tBucket}–${tBucket + 1}°</b> &nbsp;<b style="color:${col(pBk)}">${pc(pBk)}</b>`
         + (best != null ? `<br><span style="color:#7e8ea4">pace's own favourite: <b style="color:#a78bfa">${best}–${+best + 1}°</b> at ${pc(cent[best] / q.length)}</span>` : "")
         + `</div></div>`;
