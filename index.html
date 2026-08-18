@@ -451,7 +451,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-16.69";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-16.72";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -2330,10 +2330,20 @@ function paceProbAtLeast(implied, x, h, floorF) {
   if (!o) return null;
   return o.filter(v => v >= x).length / o.length;
 }
+// THE bucket rule, used everywhere. Kalshi settles on a whole °F, so a continuous
+// forecast must be ROUNDED to its settle before being bucketed. Getting this wrong
+// (2026-08-16) made the pace panel report "settle in 81–82° 85%" and "favourite:
+// 79–80° at 59%" for the same 80.6° — two functions bucketing the same number
+// differently, and probabilities summing past 100%.
+function bucketOf(f) {
+  const s = Math.round(f);
+  return Math.floor((s - 1) / 2) * 2 + 1;
+}
+
 function paceProbBucket(implied, lo, h, floorF) {
   const o = paceOutcomes(implied, h, floorF);
   if (!o) return null;
-  return o.filter(v => v >= lo - 0.5 && v < lo + 1.5).length / o.length;
+  return o.filter(v => bucketOf(v) === lo).length / o.length;
 }
 
 function renderPaceTrack() {
@@ -2403,12 +2413,12 @@ function renderPaceTrack() {
     // odds of actually getting there, from the measured spread of this hour's implied high
     const pHour = paceResid(nowH) ? nowH : (paceResid(nowH - 1) ? nowH - 1 : null);
     if (pHour != null) {
-      const tBucket = Math.floor((Math.round(target) - 1) / 2) * 2 + 1;
+      const tBucket = bucketOf(target);
       const pAt = paceProbAtLeast(implied, target, pHour, maxF);
       const pBk = paceProbBucket(implied, tBucket, pHour, maxF);
       const q = paceOutcomes(implied, pHour, maxF) || [];
       const cent = [];
-      q.forEach(v => { const b = Math.floor((v - 1) / 2) * 2 + 1; cent[b] = (cent[b] || 0) + 1; });
+      q.forEach(v => { const b = bucketOf(v); cent[b] = (cent[b] || 0) + 1; });
       let best = null;
       Object.keys(cent).forEach(b => { if (!best || cent[b] > cent[best]) best = b; });
       const pc = v => Math.round(v * 100) + "%";
@@ -4106,7 +4116,7 @@ function analogMatch(track, k, cond) {
   const nb = scored.slice(0, k || 30);
   const outs = nb.map(x => +(lvl + (x.d.max - x.d.t[11])).toFixed(1)).sort((a, b) => a - b);
   const bkt = {};
-  outs.forEach(f => { const b = Math.floor((f - 1) / 2) * 2 + 1; bkt[b] = (bkt[b] || 0) + 1; });
+  outs.forEach(f => { const b = bucketOf(f); bkt[b] = (bkt[b] || 0) + 1; });
   const ranked = Object.entries(bkt).map(([b, c]) => ({ b: +b, p: c / outs.length })).sort((x, y) => y.p - x.p);
   return { lvl, n: outs.length, pool: scored.length,
            med: outs[Math.floor(outs.length / 2)],
@@ -4141,17 +4151,29 @@ function analogSectionHtml(grades, markDirty) {
       grades.analog = grades.analog || {};
       const key = ptDateOf(Date.now());
       if (!grades.analog[key]) {
-        grades.analog[key] = { date: key, at: Date.now(), lvl: +m.lvl.toFixed(1), med: m.med,
+        // bv = bucket-rule version. bv 2 = round-to-settle then bucket (correct).
+        // Snaps written before 2026-08-16 have no bv and used the old unrounded
+        // rule, which could put a prediction one bucket low. Their predicted
+        // bucket can't be recomputed (the 30-neighbour distribution isn't stored),
+        // so they're flagged rather than silently mixed into the live record.
+        grades.analog[key] = { date: key, at: Date.now(), bv: 2, lvl: +m.lvl.toFixed(1), med: m.med,
           top: m.ranked[0].b, topP: +m.ranked[0].p.toFixed(2),
           top2: m.ranked.slice(0, 2).map(r => r.b), n: m.n };
         if (markDirty) markDirty();
       }
     } catch (e) {}
-    const g = Object.values(grades.analog || {}).filter(e => e.graded);
-    if (g.length) {
+    const gAll = Object.values(grades.analog || {}).filter(e => e.graded);
+    const g = gAll.filter(e => e.bv === 2);
+    const legacy = gAll.length - g.length;
+    if (g.length || legacy) {
       const t1 = g.filter(e => e.hitTop).length, t2 = g.filter(e => e.hitTop2).length;
-      const mae = g.reduce((a, e) => a + Math.abs(e.med - e.settle), 0) / g.length;
-      h += `<div style="font-size:9px;color:#7e8ea4;margin-top:3px">live record: top bucket ${t1}/${g.length} · top-2 ${t2}/${g.length} · median MAE ${mae.toFixed(1)}° — carries no weight in any number above; promoted or deleted on this record at n≥50</div>`;
+      const mae = g.length ? g.reduce((a, e) => a + Math.abs(e.med - e.settle), 0) / g.length : null;
+      h += `<div style="font-size:9px;color:#7e8ea4;margin-top:3px">live record: `
+        + (g.length
+            ? `top bucket ${t1}/${g.length} · top-2 ${t2}/${g.length} · median MAE ${mae.toFixed(1)}°`
+            : `no days on the current bucket rule yet`)
+        + (legacy ? ` <span style="color:#56657a">(+${legacy} earlier day${legacy > 1 ? "s" : ""} excluded — graded under the pre-08-16 bucket rule)</span>` : "")
+        + ` — carries no weight in any number above; promoted or deleted on this record at n≥50</div>`;
     } else {
       h += `<div style="font-size:9px;color:#7e8ea4;margin-top:3px">no graded days yet — carries no weight in any number above</div>`;
     }
@@ -4365,7 +4387,7 @@ function gradeCheckpointSnaps() {
         if ((Date.parse(today) - Date.parse(e.date)) / 86400000 > 15) { e.skipped = true; changed = true; }
         return;
       }
-      const tb = Math.floor((r.settle - 1) / 2) * 2 + 1;
+      const tb = bucketOf(r.settle);
       e.graded = true; e.settle = r.settle; e.src = r.src;
       e.hitTop = e.top === tb; e.hitTop2 = (e.top2 || []).indexOf(tb) >= 0;
       changed = true;
@@ -4479,7 +4501,15 @@ function renderCheckpoint() {
       }
       const skyKnown = ob.sky === "CLR" || ob.sky === "OVC";
       if (skyKnown) {
-        snap = { date: today, key: pt.key, tF: ob.tF, sky: ob.sky, at: ob.iso };
+        // Freeze the CORRECTIONS with the anchor, not just the reading. Both
+        // ckptBiasF and the regime adjustment were being recomputed on every
+        // render, so a frozen 10 AM anchor still drifted through the day — the
+        // regime alone can swing the call 4°F (clear+light -1.17 → windy +3.07)
+        // as the wind and sky change. A checkpoint that moves isn't a checkpoint.
+        let regKey = null;
+        try { const rg = dayRegime(); if (rg) regKey = rg.key; } catch (e) {}
+        snap = { date: today, key: pt.key, tF: ob.tF, sky: ob.sky, at: ob.iso,
+                 cBias: +ckptBiasF(pt.key).toFixed(2), reg: regKey };
         grades.snaps[snapKey] = snap; froze = true;
       } else {
         // sky unknown: render both tables live, don't freeze (can't grade honestly)
@@ -4596,9 +4626,13 @@ function ckptBiasF(key) {
 
 function ckptSectionHtml(pt, snap, frozen) {
   const T = CHECKPOINT_TABLES[pt.key][snap.sky];
-  const cBias = ckptBiasF(pt.key);
-  const reg = dayRegime();
-  const rAdj = (reg && CKPT_REGIME_ADJ[reg.key] != null) ? CKPT_REGIME_ADJ[reg.key] : 0;
+  // Prefer what was frozen at snap time. Older snaps (pre-2026-08-16) have
+  // neither field, so they fall back to live values — those rows will keep
+  // drifting until they roll off, and that's honest rather than retro-fitted.
+  const cBias = (typeof snap.cBias === "number") ? snap.cBias : ckptBiasF(pt.key);
+  const regKey = snap.reg !== undefined ? snap.reg : (() => { try { const r = dayRegime(); return r ? r.key : null; } catch (e) { return null; } })();
+  const rAdj = (regKey && CKPT_REGIME_ADJ[regKey] != null) ? CKPT_REGIME_ADJ[regKey] : 0;
+  const regLabel = regKey && REGIME_LABEL[regKey] ? REGIME_LABEL[regKey] : null;
   const call = snap.tF + T.med - cBias - rAdj;
   const callSettle = Math.round(call);
   let divergence = "";
@@ -4613,7 +4647,7 @@ function ckptSectionHtml(pt, snap, frozen) {
   let h = `<div style="margin:6px 0 2px;font-size:11px;color:#eef3fa"><b>${pt.label}</b>: ${snap.tF.toFixed(1)}°F, ${snap.sky === "CLR" ? "clear" : "overcast"}${frozen ? "" : " (sky unknown — showing " + snap.sky + ")"} <span style="color:#7e8ea4">· n=${T.n} July days${frozen ? " · frozen" : ""}</span></div>`;
   h += `<div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin:3px 0 2px">
     <div style="font-size:24px;font-weight:800;color:#eef3fa;font-variant-numeric:tabular-nums">${callSettle}°</div>
-    <div style="font-size:10px;line-height:1.45;color:#94a2b4">checkpoint call (${call.toFixed(1)}°F) · 50% band ${(snap.tF + T.p25 - cBias - rAdj).toFixed(1)}–${(snap.tF + T.p75 - cBias - rAdj).toFixed(1)}°F${cBias ? ` · self-corrected ${cBias > 0 ? "−" : "+"}${Math.abs(cBias).toFixed(1)}°` : ""}${rAdj ? ` · ${reg.label} ${rAdj > 0 ? "−" : "+"}${Math.abs(rAdj).toFixed(1)}°` : ""}${divergence}</div>
+    <div style="font-size:10px;line-height:1.45;color:#94a2b4">checkpoint call (${call.toFixed(1)}°F) · 50% band ${(snap.tF + T.p25 - cBias - rAdj).toFixed(1)}–${(snap.tF + T.p75 - cBias - rAdj).toFixed(1)}°F${cBias ? ` · self-corrected ${cBias > 0 ? "−" : "+"}${Math.abs(cBias).toFixed(1)}°` : ""}${rAdj ? ` · ${regLabel} ${rAdj > 0 ? "−" : "+"}${Math.abs(rAdj).toFixed(1)}°` : ""}${snap.reg !== undefined ? " · frozen" : ""}${divergence}</div>
   </div>`;
   h += `<div class="ck-hide" style="display:flex;flex-wrap:wrap;gap:5px;margin:4px 0 8px">`;
   ckptChips(pt.key, snap.tF, snap.sky).forEach(c => {
