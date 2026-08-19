@@ -451,7 +451,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-17.73";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-19.75";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -2432,6 +2432,24 @@ function renderPaceTrack() {
       : ` · running <b style="color:${Math.abs(gr) <= 1.5 ? "#34d399" : gr > 0 ? "#fbbf24" : "#60a5fa"}">`
         + `${Math.abs(gr).toFixed(1)}° ${gr > 0 ? "ahead of" : "behind"}</b> pace`;
   }
+  // Where the trajectory is actually pointed, right on the headline. Band comes
+  // from the measured spread of the implied high at this hour (p25–p75 of 1691
+  // days), so it narrows on its own through the afternoon instead of pretending
+  // to a precision the morning doesn't have.
+  if (implied != null) {
+    const trj = Math.max(implied, settleFloorOf(maxF));
+    const hq = paceResid(nowH) || paceResid(nowH - 1);
+    let band = "";
+    if (hq && hq.length === 41) {
+      const lo = trj + hq[10], hi = trj + hq[30];    // p25 / p75
+      band = ` <span style="color:#7e8ea4;font-size:9.5px">[${lo.toFixed(0)}–${hi.toFixed(0)}]</span>`;
+    }
+    const dd = +(trj - target).toFixed(1) || 0;
+    head += ` · <span style="color:#7e8ea4">headed for</span> <b style="color:${Math.abs(dd) <= 1.5 ? "#34d399" : dd > 0 ? "#fbbf24" : "#60a5fa"};font-size:12px">${trj.toFixed(1)}°</b>${band}`
+      + ` <span style="color:#56657a;font-size:9.5px">(${dd >= 0 ? "+" : ""}${dd.toFixed(1)} vs target)</span>`;
+  } else {
+    head += ` · <span style="color:#56657a;font-size:9.5px">too early to project a high — needs ~25% of the day's climb banked</span>`;
+  }
   head += `</div>`;
   if (implied != null) {
     if (implied < maxF) implied = maxF;             // can't imply a high below what already happened
@@ -2824,6 +2842,19 @@ function binLabel(S) {
 // locked AI call against reality.
 // =============================================================================
 const CLI_KEY = "ksea_cli_v2";
+// Keep the newest `keep` entries by their own date field, discarding only the
+// oldest. Never empties the store — losing verified settles is expensive.
+function trimByDate(store, keep) {
+  try {
+    const ks = Object.keys(store || {});
+    if (ks.length <= keep) return store;
+    ks.sort((a, b) => String((store[a] || {}).date || "") < String((store[b] || {}).date || "") ? -1 : 1);
+    const out = {};
+    ks.slice(-keep).forEach(k => { out[k] = store[k]; });
+    return out;
+  } catch (e) { return store; }
+}
+
 function loadCLI() { try { return JSON.parse(localStorage.getItem(CLI_KEY) || "{}"); } catch (e) { return {}; } }
 function saveCLI(o) { try { localStorage.setItem(CLI_KEY, JSON.stringify(o)); } catch (e) {} }
 
@@ -2870,7 +2901,11 @@ async function fetchCLI(force) {
     const items = (j["@graph"] || []).slice(0, 15);  // newest first; cap client-side
     if (!items.length) throw new Error("CLI feed returned 0 products");
     cache.products = cache.products || {};
-    if (Object.keys(cache.products).length > 80) cache.products = {}; // crude prune
+    // 2026-08-19: this used to be `cache.products = {}` — it WIPED the entire
+    // verified-settle history on hitting the cap, taking officials with it. The
+    // store collapsed 35 days → 9, and auto-bias, the checkpoint correction and
+    // Component Trust all learn from that. Now drop only the oldest by date.
+    cache.products = trimByDate(cache.products, 120);
     let fetched = 0;
     for (const it of items) {
       const id = it.id || it["@id"];
@@ -3015,7 +3050,7 @@ async function fetchDSM(force) {
     const page = parseDsmPage(await r.text());
     if (!page) throw new Error("no DSMSEA product found on page");
     cache.products = cache.products || {};
-    if (Object.keys(cache.products).length > 60) cache.products = {};
+    cache.products = trimByDate(cache.products, 90);   // was a full wipe — see CLI note
     if (cache.lastSeenId !== page.pid) { cache.newAt = now; cache.lastSeenId = page.pid; }
     if (!cache.products[page.pid]) {
       const p = parseDSMText(page.text, page.issued);
@@ -4588,6 +4623,7 @@ function renderCheckpoint() {
 // correction overshoots the other way (+1.7 t10 / +1.0 t12) because it has no
 // regime awareness. Widening does not make that worse (+1.68 → +1.71).
 const CKPT_CLAMP = 5.0;   // widened from 3.0 on 2026-08-14 — see note above
+const CKPT_REG_CLAMP = 8.0;  // regression fit can legitimately reach further than the flat median
 
 // ---- DAY REGIME (2026-08-14) --------------------------------------------------
 // Four kinds of day, classified from the live 10 AM-onward wind and sky. Measured
@@ -4649,7 +4685,39 @@ function ckptBiasF(key) {
     if (errs.length < 4) return 0;
     const s = errs.slice().sort((a, b) => a - b);
     const med = s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
-    return Math.max(-CKPT_CLAMP, Math.min(CKPT_CLAMP, med));
+    const flat = Math.max(-CKPT_CLAMP, Math.min(CKPT_CLAMP, med));
+    // The checkpoint's error is not a constant — it tracks how hot the day is,
+    // and the model's own forecast says that in advance. Measured 2026-08-19 on
+    // 40 graded snaps per key: error vs forecast r = -0.64 (t10) / -0.61 (t12).
+    // Walk-forward, t10 raw 4.58 → rolling 3.46 → regression 3.11; t12 3.34 →
+    // 2.54 → 2.26. Falls back to the rolling median when the fit isn't available.
+    try {
+      const g2 = loadCkptGrades();
+      const log = accLogRead();
+      const pts = Object.values((g2 && g2.snaps) || {})
+        .filter(s2 => s2 && s2.graded && s2.key === key && s2.sky && s2.date
+                      && typeof s2.tF === "number" && typeof s2.settle === "number"
+                      && CHECKPOINT_TABLES[key] && CHECKPOINT_TABLES[key][s2.sky]
+                      && log[s2.date] && typeof log[s2.date].rawMedian === "number")
+        .sort((a, b) => (a.date < b.date ? -1 : 1))
+        .slice(-30)
+        .map(s2 => ({ x: log[s2.date].rawMedian,
+                      y: s2.tF + CHECKPOINT_TABLES[key][s2.sky].med - s2.settle }));
+      if (pts.length >= 10) {
+        const mx = pts.reduce((a, p) => a + p.x, 0) / pts.length;
+        const my = pts.reduce((a, p) => a + p.y, 0) / pts.length;
+        const den = pts.reduce((a, p) => a + (p.x - mx) * (p.x - mx), 0);
+        if (den > 0.5) {
+          const sl = pts.reduce((a, p) => a + (p.x - mx) * (p.y - my), 0) / den;
+          const todayProj = (() => { try { const pj = getDayProjection(ptDateOf(Date.now())); return pj && pj.median != null ? pj.median : null; } catch (e) { return null; } })();
+          if (todayProj != null) {
+            const fit = (my - sl * mx) + sl * todayProj;
+            if (isFinite(fit)) return Math.max(-CKPT_REG_CLAMP, Math.min(CKPT_REG_CLAMP, fit));
+          }
+        }
+      }
+    } catch (e) {}
+    return flat;
   } catch (e) { return 0; }
 }
 
@@ -8453,8 +8521,14 @@ function logAccuracySnapshot() {
   // number then feeds autoBiasF and Component Trust as if it were a morning lock.
   // Now: no stamp before 7 AM at all, and after that still wait for calibration
   // data until 9, when it stamps regardless so a day can never go unlogged.
-  if (!log[today.date] && pacHour < 7) return;
-  if (!log[today.date] && CALIB.enabled && !autoBiasReady() && pacHour < 9) return;
+  // 2026-08-19: snap the row when the AI CALL locks (10 AM), not at first open.
+  // Measured over 9 verified days: rows captured pre-dawn (snapHour 0.3–9.2) ran
+  // MAE 2.14 / bias +1.41, while the 10 AM lock of the SAME engine ran MAE 0.78
+  // and hit the exact bucket 5 times in 9. autoBiasF learns from these rows, so
+  // it was measuring the bias of a 5 AM forecast and applying it all day.
+  // After 12 it stamps regardless, so a day opened late still gets logged.
+  if (!log[today.date] && pacHour < AI_LOCK_HOUR_PT && pacHour < 12) return;
+  if (!log[today.date] && CALIB.enabled && !autoBiasReady() && pacHour < 12) return;
   const rec = log[today.date] || {
     date: today.date,
     snapHour: r1(pacHour),
