@@ -451,7 +451,7 @@
 // =============================================================================
 // Config
 // =============================================================================
-const APP_BUILD = "b2026-08-19.75";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
+const APP_BUILD = "b2026-08-25.79";   // bump on every ship — the header shows it, so "which build am I running" is a glance, not an investigation
 const LAT = 47.45, LON = -122.31;
 const TZ = "America/Los_Angeles";
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
@@ -1277,12 +1277,24 @@ function saveCalibOverrides() {
 // Is auto-bias actually able to compute? Same counting rule as autoBiasF: at
 // least 4 settle-verified days. Used to hold off stamping the day's accuracy row
 // until the CLI fetch has landed — see accLogSnapshot.
+// A row captured at 4 PM is not a forecast — by then most of the day has happened.
+// Measured 2026-08-19: |error| correlates with capture hour at r = -0.56, and 8 of
+// 9 AI calls had "locked" between 1:43 PM and 9:33 PM because the app simply wasn't
+// open at 10 AM. Anything learned from those rows is learned from a near-observation
+// and then applied to a genuine morning forecast. Log every day; learn only from
+// rows captured inside a real forecast window.
+const LEARN_MAX_SNAP_HOUR = 12;
+function isLearnableRow(e) {
+  return !!e && typeof e.rawMedian === "number"
+    && (e.snapHour == null || e.snapHour <= LEARN_MAX_SNAP_HOUR);
+}
+
 function autoBiasReady() {
   try {
     const log = accLogRead();
     const finals = {};
     Object.values((loadCLI().products) || {}).forEach(p => { if (p && p.final && p.date && isFinite(p.max)) finals[p.date] = p.max; });
-    return Object.keys(log).filter(d => finals[d] != null && log[d] && typeof log[d].rawMedian === "number").length >= 4;
+    return Object.keys(log).filter(d => finals[d] != null && isLearnableRow(log[d])).length >= 4;
   } catch (e) { return false; }
 }
 
@@ -1294,7 +1306,7 @@ function autoBiasF() {
     // settle-verified days only — a partial-day "realized high" once fed a +13.3
     // phantom error into this window (2026-07-23); provisional captures don't vote
     const errs = Object.keys(log).sort()
-      .filter(d => finals[d] != null && log[d] && typeof log[d].rawMedian === "number")
+      .filter(d => finals[d] != null && isLearnableRow(log[d]))
       .map(d => log[d].rawMedian - finals[d])
       .slice(-10);
     if (errs.length < 4) return 0;
@@ -2774,11 +2786,25 @@ function renderAICall() {
     if (confEl) confEl.textContent = "—";
     if (whyEl)  whyEl.textContent = call && call.noLock
       ? "This date predates the locked-call feature, or the app wasn't open after 10 AM that day."
-      : "Today's call locks at the first refresh at/after 10:00 AM PT, then stays fixed.";
+      : "Today's call locks at the first refresh at/after 10:00 AM PT, then stays fixed. Open the app before 10 or it locks whenever you do — and a late lock is not a forecast.";
     if (metaEl) metaEl.innerHTML = "";
     return;
   }
 
+  // Show WHEN this locked. The call is supposed to be a morning read, but it
+  // actually freezes at the first refresh at/after 10 AM — so if the app wasn't
+  // open until 4 PM, that's a 4 PM call and must not be read as a forecast.
+  let lockNote = "";
+  try {
+    if (call.lockedAt) {
+      const lt = new Date(call.lockedAt);
+      const lh = +new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", hour12: false }).format(lt);
+      const lbl = new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }).format(lt);
+      lockNote = lh > LEARN_MAX_SNAP_HOUR
+        ? ` <span style="color:#fbbf24">· locked ${lbl} — after noon, so this is a late read, not a morning call</span>`
+        : ` <span style="color:#7e8ea4">· locked ${lbl}</span>`;
+    }
+  } catch (e) {}
   const isPreview = !!call.preview;
   const confTone = call.conf === "High" ? "pos" : call.conf === "Low" ? "neg" : "accent";
   if (confEl) confEl.textContent = isPreview ? "preview · unlocked" : (call.conf + " confidence");
@@ -2792,7 +2818,7 @@ function renderAICall() {
     metaEl.innerHTML = `<span>🔓 Locks 10:00 AM PT · ${call.date.slice(5)}</span>`;
   } else {
     const t = new Date(call.lockedAt).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
-    metaEl.innerHTML = `<span>🔒 Locked ${t} · ${call.date.slice(5)} · does not change</span>`
+    metaEl.innerHTML = `<span>🔒 Locked ${t} · ${call.date.slice(5)} · does not change${lockNote}</span>`
       + `<span onclick="relockAICall()" style="cursor:pointer;color:#60a5fa">↻ relock</span>`;
   }
 }
@@ -3866,17 +3892,38 @@ function trustRegimeByDate() {
   return out;
 }
 
+// Hour (PT) at which a stored value was locked, or null if unknown. Component
+// Trust MUST filter on this: a call frozen at 4 PM has watched most of the day
+// happen and will beat a genuine morning forecast for reasons that have nothing
+// to do with skill. Found 2026-08-19 — "AI blend" was ranking FIRST with no lock
+// filter at all while ENS raw one line away was already filtered to <=12; 25 of
+// its 34 stored calls had locked after noon (median 3:54 PM, one at 9:33 PM).
+function lockHourPT(iso) {
+  try {
+    if (!iso) return null;
+    const h = +new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", hour12: false }).format(new Date(iso));
+    const m = +new Intl.DateTimeFormat("en-US", { timeZone: TZ, minute: "numeric" }).format(new Date(iso));
+    return isFinite(h) ? h + (isFinite(m) ? m / 60 : 0) : null;
+  } catch (e) { return null; }
+}
+function lockedInWindow(iso) {
+  const h = lockHourPT(iso);
+  return h == null || h <= LEARN_MAX_SNAP_HOUR;   // unknown = keep (legacy rows)
+}
+
 function componentTrust() {
   const settles = {};
   try { Object.values((loadCLI().products) || {}).forEach(p => { if (p && p.final && p.date && isFinite(p.max)) settles[p.date] = p.max; }); } catch (e) {}
   const comps = {};
   const add = (name, d, v) => { if (d in settles && isFinite(v)) (comps[name] = comps[name] || {})[d] = v; };
   try { const log = accLogRead(); Object.keys(log).forEach(d => { const e = log[d]; if (e && isFinite(e.rawMedian) && e.snapHour != null && e.snapHour <= 12) add("ENS raw", d, e.rawMedian); }); } catch (e) {}
-  try { const ai = loadAICalls(); Object.keys(ai).forEach(d => { const c = ai[d]; if (c && c.valid && !c.repaired && isFinite(c.predHigh)) add("AI blend", d, c.predHigh); }); } catch (e) {}
+  try { const ai = loadAICalls(); Object.keys(ai).forEach(d => { const c = ai[d];
+    if (c && c.valid && !c.repaired && isFinite(c.predHigh) && lockedInWindow(c.lockedAt)) add("AI blend", d, c.predHigh); }); } catch (e) {}
   try {
     const sn = (loadCouncil().snapshots) || {};
     Object.keys(sn).forEach(d => {
       const m = (sn[d] || {}).models || {};
+      if (!lockedInWindow(sn[d].lockedAt)) return;   // same rule as AI blend / ENS raw
       ["NBM", "ECMWF", "GFS"].forEach(k => { if (isFinite(m[k])) add(k, d, m[k]); });
       if (isFinite(m.HRRR) && d >= HRRR_VALID_FROM) add("HRRR", d, m.HRRR);
     });
@@ -3888,7 +3935,14 @@ function componentTrust() {
       if (!s || !s.date) return;
       if (s.key === "t10" && s.sky) sky[s.date] = s.sky;
       const T = (CHECKPOINT_TABLES[s.key] || {})[s.sky];
-      if (T && isFinite(s.tF)) add(s.key === "t10" ? "Ckpt 10AM" : "Ckpt noon", s.date, Math.round(s.tF + T.med));
+      // Grade the call the app DISPLAYED, not the bare table. Until 2026-08-19
+      // this scored `tF + T.med` with no correction, so the panel reported the
+      // checkpoint at bias -6.7 while the corrected number on screen was near
+      // -2. Snaps written since the freeze carry their own cBias/reg; older ones
+      // have neither, so they're still scored raw and flagged in the label.
+      if (T && isFinite(s.tF)) {
+        add(s.key === "t10" ? "Ckpt 10AM" : "Ckpt noon", s.date, Math.round(s.tF + T.med + (CKPT_OFFSET[s.key] || 0)));
+      }
     });
   } catch (e) {}
   const regByDate = trustRegimeByDate();
@@ -3993,7 +4047,7 @@ function renderTrust() {
   if (collecting.length) {
     h += `<div style="margin-top:5px;font-size:9.5px;color:#7e8ea4">collecting (n<5): ${collecting.map(nm => `${nm} n=${t[nm].n}`).join(" · ")}</div>`;
   }
-  h += `<div style="margin-top:5px;font-size:8.5px;color:#56657a;line-height:1.35">truth = final CLI · ENS morning locks only · HRRR pre-${HRRR_VALID_FROM} excluded · splits measured, never narrative</div>`;
+  h += `<div style="margin-top:5px;font-size:8.5px;color:#56657a;line-height:1.35">every component counted only on days its value was locked by ${LEARN_MAX_SNAP_HOUR}:00 PT — a later lock has already seen the day · truth = final CLI · ENS morning locks only · HRRR pre-${HRRR_VALID_FROM} excluded · splits measured, never narrative</div>`;
   body.innerHTML = h;
   if (statusEl) {
     statusEl.textContent = ranked.length ? `${ranked[0]} ${t[ranked[0]].mae.toFixed(1)}°` : `collecting`;
@@ -4570,10 +4624,7 @@ function renderCheckpoint() {
         // render, so a frozen 10 AM anchor still drifted through the day — the
         // regime alone can swing the call 4°F (clear+light -1.17 → windy +3.07)
         // as the wind and sky change. A checkpoint that moves isn't a checkpoint.
-        let regKey = null;
-        try { const rg = dayRegime(); if (rg) regKey = rg.key; } catch (e) {}
-        snap = { date: today, key: pt.key, tF: ob.tF, sky: ob.sky, at: ob.iso,
-                 cBias: +ckptBiasF(pt.key).toFixed(2), reg: regKey };
+        snap = { date: today, key: pt.key, tF: ob.tF, sky: ob.sky, at: ob.iso };
         grades.snaps[snapKey] = snap; froze = true;
       } else {
         // sky unknown: render both tables live, don't freeze (can't grade honestly)
@@ -4622,24 +4673,10 @@ function renderCheckpoint() {
 // KNOWN LIMIT, not fixed by the clamp: on days that settle under 78 the
 // correction overshoots the other way (+1.7 t10 / +1.0 t12) because it has no
 // regime awareness. Widening does not make that worse (+1.68 → +1.71).
-const CKPT_CLAMP = 5.0;   // widened from 3.0 on 2026-08-14 — see note above
-const CKPT_REG_CLAMP = 8.0;  // regression fit can legitimately reach further than the flat median
-
-// ---- DAY REGIME (2026-08-14) --------------------------------------------------
-// Four kinds of day, classified from the live 10 AM-onward wind and sky. Measured
-// on 1458 Jul/Aug archive days — these genuinely separate outcomes:
-//   clear + light   n=97   median high 84.2°F   climb from 10 AM +14.4
-//   N/NW            n=379              80.6                      +13.0
-//   other           n=425              78.8                      +14.0
-//   marine/cloudy   n=514              71.8                      +11.0
-//   strong wind     n=43               71.6                      + 9.2
-// They ALSO shift the checkpoint table's error, which a flat correction can't see:
-//   strong wind +1.74 · marine/cloudy -0.44 · N/NW -1.40 · clear+light -2.50
-// CKPT_REGIME_ADJ below is each regime's DEVIATION from the all-day bias (-1.33),
-// so it composes with the rolling ckptBiasF without double-counting.
-// Walk-forward: flat correction 3.05 → regime-aware 2.96 MAE, bias +0.47 → -0.09.
-// NOTE: regime conditioning helps the CHECKPOINT only. Tested on the model
-// projection and it made things worse (1.12 → 1.19) — do not wire it there.
+// ---- DAY REGIME --------------------------------------------------------------
+// Classifier only. It no longer touches the checkpoint (that now uses one fixed
+// offset); it survives because the regime TAG under the projection and the
+// nowcast's per-station offset deltas both read it.
 const REGIME_LABEL = {
   clearlight: "clear + light wind",
   nnw:        "N/NW flow",
@@ -4647,9 +4684,6 @@ const REGIME_LABEL = {
   windy:      "strong wind (mixing)",
   other:      "mixed",
 };
-const CKPT_REGIME_ADJ = { windy: 3.07, marine: 0.89, nnw: -0.07, other: -1.06, clearlight: -1.17 };
-
-// Classify from whatever the app currently holds. Returns null if wind is unknown.
 function dayRegime() {
   try {
     const c = state.current;
@@ -4672,65 +4706,27 @@ function dayRegime() {
   } catch (e) { return null; }
 }
 // ------------------------------------------------------------------------------
-function ckptBiasF(key) {
-  try {
-    const g = loadCkptGrades();
-    const errs = Object.values((g && g.snaps) || {})
-      .filter(s => s && s.graded && s.key === key && s.date && s.sky
-                   && typeof s.tF === "number" && typeof s.settle === "number"
-                   && CHECKPOINT_TABLES[key] && CHECKPOINT_TABLES[key][s.sky])
-      .sort((a, b) => (a.date < b.date ? -1 : 1))
-      .map(s => s.tF + CHECKPOINT_TABLES[key][s.sky].med - s.settle)
-      .slice(-12);
-    if (errs.length < 4) return 0;
-    const s = errs.slice().sort((a, b) => a - b);
-    const med = s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
-    const flat = Math.max(-CKPT_CLAMP, Math.min(CKPT_CLAMP, med));
-    // The checkpoint's error is not a constant — it tracks how hot the day is,
-    // and the model's own forecast says that in advance. Measured 2026-08-19 on
-    // 40 graded snaps per key: error vs forecast r = -0.64 (t10) / -0.61 (t12).
-    // Walk-forward, t10 raw 4.58 → rolling 3.46 → regression 3.11; t12 3.34 →
-    // 2.54 → 2.26. Falls back to the rolling median when the fit isn't available.
-    try {
-      const g2 = loadCkptGrades();
-      const log = accLogRead();
-      const pts = Object.values((g2 && g2.snaps) || {})
-        .filter(s2 => s2 && s2.graded && s2.key === key && s2.sky && s2.date
-                      && typeof s2.tF === "number" && typeof s2.settle === "number"
-                      && CHECKPOINT_TABLES[key] && CHECKPOINT_TABLES[key][s2.sky]
-                      && log[s2.date] && typeof log[s2.date].rawMedian === "number")
-        .sort((a, b) => (a.date < b.date ? -1 : 1))
-        .slice(-30)
-        .map(s2 => ({ x: log[s2.date].rawMedian,
-                      y: s2.tF + CHECKPOINT_TABLES[key][s2.sky].med - s2.settle }));
-      if (pts.length >= 10) {
-        const mx = pts.reduce((a, p) => a + p.x, 0) / pts.length;
-        const my = pts.reduce((a, p) => a + p.y, 0) / pts.length;
-        const den = pts.reduce((a, p) => a + (p.x - mx) * (p.x - mx), 0);
-        if (den > 0.5) {
-          const sl = pts.reduce((a, p) => a + (p.x - mx) * (p.y - my), 0) / den;
-          const todayProj = (() => { try { const pj = getDayProjection(ptDateOf(Date.now())); return pj && pj.median != null ? pj.median : null; } catch (e) { return null; } })();
-          if (todayProj != null) {
-            const fit = (my - sl * mx) + sl * todayProj;
-            if (isFinite(fit)) return Math.max(-CKPT_REG_CLAMP, Math.min(CKPT_REG_CLAMP, fit));
-          }
-        }
-      }
-    } catch (e) {}
-    return flat;
-  } catch (e) { return 0; }
-}
+
+// ---- CHECKPOINT OFFSET -------------------------------------------------------
+// This replaced SIX layers of correction (rolling median, three clamp widenings,
+// a regime adjustment, regression on the model forecast, and a 35% blend of the
+// last two). All of it existed to patch one fact: the table is ~5°F low. A
+// reactive corrector fitted on recent residuals swung +5.0, -8.0 and +3.2 on
+// three consecutive days and on 2026-08-25 turned a noon call that was 0.9° off
+// into one 4.1° off. One fixed number per key instead — measured on 44 graded
+// snaps, and it cannot swing:
+//   t10  raw 4.65 → +3.5: 3.39   t12  raw 3.49 → +3.5: 2.77
+// The right long-term fix is refitting the tables themselves, not offsetting them.
+const CKPT_OFFSET = { t10: 3.5, t12: 3.5 };
+function ckptBiasF(key) { return -(CKPT_OFFSET[key] || 0); }
 
 function ckptSectionHtml(pt, snap, frozen) {
   const T = CHECKPOINT_TABLES[pt.key][snap.sky];
   // Prefer what was frozen at snap time. Older snaps (pre-2026-08-16) have
   // neither field, so they fall back to live values — those rows will keep
   // drifting until they roll off, and that's honest rather than retro-fitted.
-  const cBias = (typeof snap.cBias === "number") ? snap.cBias : ckptBiasF(pt.key);
-  const regKey = snap.reg !== undefined ? snap.reg : (() => { try { const r = dayRegime(); return r ? r.key : null; } catch (e) { return null; } })();
-  const rAdj = (regKey && CKPT_REGIME_ADJ[regKey] != null) ? CKPT_REGIME_ADJ[regKey] : 0;
-  const regLabel = regKey && REGIME_LABEL[regKey] ? REGIME_LABEL[regKey] : null;
-  const call = snap.tF + T.med - cBias - rAdj;
+  const cBias = ckptBiasF(pt.key), rAdj = 0;
+  const call = snap.tF + T.med - cBias;
   const callSettle = Math.round(call);
   let divergence = "";
   try {
@@ -4744,7 +4740,7 @@ function ckptSectionHtml(pt, snap, frozen) {
   let h = `<div style="margin:6px 0 2px;font-size:11px;color:#eef3fa"><b>${pt.label}</b>: ${snap.tF.toFixed(1)}°F, ${snap.sky === "CLR" ? "clear" : "overcast"}${frozen ? "" : " (sky unknown — showing " + snap.sky + ")"} <span style="color:#7e8ea4">· n=${T.n} July days${frozen ? " · frozen" : ""}</span></div>`;
   h += `<div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin:3px 0 2px">
     <div style="font-size:24px;font-weight:800;color:#eef3fa;font-variant-numeric:tabular-nums">${callSettle}°</div>
-    <div style="font-size:10px;line-height:1.45;color:#94a2b4">checkpoint call (${call.toFixed(1)}°F) · 50% band ${(snap.tF + T.p25 - cBias - rAdj).toFixed(1)}–${(snap.tF + T.p75 - cBias - rAdj).toFixed(1)}°F${cBias ? ` · self-corrected ${cBias > 0 ? "−" : "+"}${Math.abs(cBias).toFixed(1)}°` : ""}${rAdj ? ` · ${regLabel} ${rAdj > 0 ? "−" : "+"}${Math.abs(rAdj).toFixed(1)}°` : ""}${snap.reg !== undefined ? " · frozen" : ""}${divergence}</div>
+    <div style="font-size:10px;line-height:1.45;color:#94a2b4">checkpoint call (${call.toFixed(1)}°F) · 50% band ${(snap.tF + T.p25 - cBias).toFixed(1)}–${(snap.tF + T.p75 - cBias).toFixed(1)}°F · table +${CKPT_OFFSET[pt.key].toFixed(1)}°${divergence}</div>
   </div>`;
   h += `<div class="ck-hide" style="display:flex;flex-wrap:wrap;gap:5px;margin:4px 0 8px">`;
   ckptChips(pt.key, snap.tF, snap.sky).forEach(c => {
@@ -4753,7 +4749,7 @@ function ckptSectionHtml(pt, snap, frozen) {
       <span style="color:#cdd9e8">≥${c.K}°</span> <b style="color:${col}">${Math.round(c.p)}%</b>${c.noisy ? "<span style=\"font-size:8px;color:#7e8ea4\"> noisy</span>" : ""}</div>`;
   });
   h += `</div>`;
-  h += `<div class="ck-hide" style="font-size:9.5px;color:#7e8ea4;margin-bottom:6px">floor: 95% of these days add at least +${T.floor5.toFixed(1)}°F from here → high ≥ ${(snap.tF + T.floor5 - cBias - rAdj).toFixed(1)}°F is the 5th-percentile line. </div>`;
+  h += `<div class="ck-hide" style="font-size:9.5px;color:#7e8ea4;margin-bottom:6px">floor: 95% of these days add at least +${T.floor5.toFixed(1)}°F from here → high ≥ ${(snap.tF + T.floor5 - cBias).toFixed(1)}°F is the 5th-percentile line. </div>`;
   return h;
 }
 
@@ -8532,6 +8528,7 @@ function logAccuracySnapshot() {
   const rec = log[today.date] || {
     date: today.date,
     snapHour: r1(pacHour),
+    late: pacHour > LEARN_MAX_SNAP_HOUR,   // captured too late to be a forecast — logged, not learned from
     rawMedian: r1(proj.rawMedian),
     calMedian: r1(proj.median),
     calP10: r1(proj.p10),
